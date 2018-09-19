@@ -5,12 +5,11 @@
 'use strict';
 
 import 'vs/css!./welcomeOverlay';
-import { $, Builder } from 'vs/base/browser/builder';
 import * as dom from 'vs/base/browser/dom';
 import { Registry } from 'vs/platform/registry/common/platform';
 import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
 import { ShowAllCommandsAction } from 'vs/workbench/parts/quickopen/browser/commandsHandler';
-import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { Parts, IPartService } from 'vs/workbench/services/part/common/partService';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { localize } from 'vs/nls';
@@ -26,9 +25,11 @@ import { registerThemingParticipant } from 'vs/platform/theme/common/themeServic
 import { textPreformatForeground, foreground } from 'vs/platform/theme/common/colorRegistry';
 import { Color } from 'vs/base/common/color';
 
+const $ = dom.$;
+
 interface Key {
 	id: string;
-	arrow: string;
+	arrow?: string;
 	label: string;
 	command?: string;
 	arrowLast?: boolean;
@@ -78,6 +79,11 @@ const keys: Key[] = [
 		label: localize('welcomeOverlay.problems', "View errors and warnings"),
 		command: 'workbench.actions.view.problems'
 	},
+	{
+		id: 'terminal',
+		label: localize('welcomeOverlay.terminal', "Toggle integrated terminal"),
+		command: 'workbench.action.terminal.toggleTerminal'
+	},
 	// {
 	// 	id: 'openfile',
 	// 	arrow: '&cudarrl;',
@@ -91,6 +97,13 @@ const keys: Key[] = [
 		label: localize('welcomeOverlay.commandPalette', "Find and run all commands"),
 		command: ShowAllCommandsAction.ID
 	},
+	{
+		id: 'notifications',
+		arrow: '&cudarrr;',
+		arrowLast: true,
+		label: localize('welcomeOverlay.notifications', "Show notifications"),
+		command: 'notifications.showList'
+	}
 ];
 
 const OVERLAY_VISIBLE = new RawContextKey<boolean>('interfaceOverviewVisible', false);
@@ -99,8 +112,8 @@ let welcomeOverlay: WelcomeOverlay;
 
 export class WelcomeOverlayAction extends Action {
 
-	public static ID = 'workbench.action.showInterfaceOverview';
-	public static LABEL = localize('welcomeOverlay', "User Interface Overview");
+	public static readonly ID = 'workbench.action.showInterfaceOverview';
+	public static readonly LABEL = localize('welcomeOverlay', "User Interface Overview");
 
 	constructor(
 		id: string,
@@ -121,8 +134,8 @@ export class WelcomeOverlayAction extends Action {
 
 export class HideWelcomeOverlayAction extends Action {
 
-	public static ID = 'workbench.action.hideInterfaceOverview';
-	public static LABEL = localize('hideWelcomeOverlay', "Hide Interface Overview");
+	public static readonly ID = 'workbench.action.hideInterfaceOverview';
+	public static readonly LABEL = localize('hideWelcomeOverlay', "Hide Interface Overview");
 
 	constructor(
 		id: string,
@@ -143,13 +156,13 @@ class WelcomeOverlay {
 
 	private _toDispose: IDisposable[] = [];
 	private _overlayVisible: IContextKey<boolean>;
-	private _overlay: Builder;
+	private _overlay: HTMLElement;
 
 	constructor(
 		@IPartService private partService: IPartService,
-		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
+		@IEditorService private editorService: IEditorService,
 		@ICommandService private commandService: ICommandService,
-		@IContextKeyService private _contextKeyService: IContextKeyService,
+		@IContextKeyService private readonly _contextKeyService: IContextKeyService,
 		@IKeybindingService private keybindingService: IKeybindingService
 	) {
 		this._overlayVisible = OVERLAY_VISIBLE.bindTo(this._contextKeyService);
@@ -160,40 +173,39 @@ class WelcomeOverlay {
 		const container = this.partService.getContainer(Parts.EDITOR_PART);
 
 		const offset = this.partService.getTitleBarOffset();
-		this._overlay = $(container.parentElement)
-			.div({ 'class': 'welcomeOverlay' })
-			.style({ top: `${offset}px` })
-			.style({ height: `calc(100% - ${offset}px)` })
-			.display('none');
+		this._overlay = dom.append(container.parentElement, $('.welcomeOverlay'));
+		this._overlay.style.top = `${offset}px`;
+		this._overlay.style.height = `calc(100% - ${offset}px)`;
+		this._overlay.style.display = 'none';
 
-		this._overlay.on('click', () => this.hide(), this._toDispose);
+		this._toDispose.push(dom.addStandardDisposableListener(this._overlay, 'click', () => this.hide()));
 		this.commandService.onWillExecuteCommand(() => this.hide());
 
-		$(this._overlay).div({ 'class': 'commandPalettePlaceholder' });
+		dom.append(this._overlay, $('.commandPalettePlaceholder'));
 
-		const editorOpen = !!this.editorService.getVisibleEditors().length;
+		const editorOpen = !!this.editorService.visibleEditors.length;
 		keys.filter(key => !('withEditor' in key) || key.withEditor === editorOpen)
 			.forEach(({ id, arrow, label, command, arrowLast }) => {
-				const div = $(this._overlay).div({ 'class': ['key', id] });
-				if (!arrowLast) {
-					$(div).span({ 'class': 'arrow' }).innerHtml(arrow);
+				const div = dom.append(this._overlay, $(`.key.${id}`));
+				if (arrow && !arrowLast) {
+					dom.append(div, $('span.arrow')).innerHTML = arrow;
 				}
-				$(div).span({ 'class': 'label' }).text(label);
+				dom.append(div, $('span.label')).textContent = label;
 				if (command) {
 					const shortcut = this.keybindingService.lookupKeybinding(command);
 					if (shortcut) {
-						$(div).span({ 'class': 'shortcut' }).text(shortcut.getLabel());
+						dom.append(div, $('span.shortcut')).textContent = shortcut.getLabel();
 					}
 				}
-				if (arrowLast) {
-					$(div).span({ 'class': 'arrow' }).innerHtml(arrow);
+				if (arrow && arrowLast) {
+					dom.append(div, $('span.arrow')).innerHTML = arrow;
 				}
 			});
 	}
 
 	public show() {
-		if (this._overlay.style('display') !== 'block') {
-			this._overlay.display('block');
+		if (this._overlay.style.display !== 'block') {
+			this._overlay.style.display = 'block';
 			const workbench = document.querySelector('.monaco-workbench') as HTMLElement;
 			dom.addClass(workbench, 'blur-background');
 			this._overlayVisible.set(true);
@@ -203,10 +215,10 @@ class WelcomeOverlay {
 
 	private updateProblemsKey() {
 		const problems = document.querySelector('.task-statusbar-item');
-		const key = this._overlay.getHTMLElement().querySelector('.key.problems') as HTMLElement;
+		const key = this._overlay.querySelector('.key.problems') as HTMLElement;
 		if (problems instanceof HTMLElement) {
 			const target = problems.getBoundingClientRect();
-			const bounds = this._overlay.getHTMLElement().getBoundingClientRect();
+			const bounds = this._overlay.getBoundingClientRect();
 			const bottom = bounds.bottom - target.top + 3;
 			const left = (target.left + target.right) / 2 - bounds.left;
 			key.style.bottom = bottom + 'px';
@@ -218,8 +230,8 @@ class WelcomeOverlay {
 	}
 
 	public hide() {
-		if (this._overlay.style('display') !== 'none') {
-			this._overlay.display('none');
+		if (this._overlay.style.display !== 'none') {
+			this._overlay.style.display = 'none';
 			const workbench = document.querySelector('.monaco-workbench') as HTMLElement;
 			dom.removeClass(workbench, 'blur-background');
 			this._overlayVisible.reset();

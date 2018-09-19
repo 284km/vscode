@@ -46,6 +46,12 @@ export interface IJSONSchema {
 	contains?: IJSONSchema;
 	propertyNames?: IJSONSchema;
 
+	// schema draft 07
+	$comment?: string;
+	if?: IJSONSchema;
+	then?: IJSONSchema;
+	else?: IJSONSchema;
+
 	// VSCode extensions
 	defaultSnippets?: IJSONSchemaSnippet[]; // VSCode extension
 	errorMessage?: string; // VSCode extension
@@ -55,6 +61,7 @@ export interface IJSONSchema {
 	markdownEnumDescriptions?: string[]; // VSCode extension
 	markdownDescription?: string; // VSCode extension
 	doNotSuggest?: boolean; // VSCode extension
+	allowComments?: boolean; // VSCode extension
 }
 
 export interface IJSONSchemaMap {

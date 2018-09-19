@@ -7,7 +7,6 @@
 import { transformErrorForSerialization } from 'vs/base/common/errors';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { ErrorCallback, TPromise, ValueCallback } from 'vs/base/common/winjs.base';
-import { ShallowCancelThenPromise } from 'vs/base/common/async';
 import { isWeb } from 'vs/base/common/platform';
 
 const INITIALIZE = '$initialize';
@@ -91,11 +90,9 @@ class SimpleWorkerProtocol {
 			c: null,
 			e: null
 		};
-		let result = new TPromise<any>((c, e, p) => {
+		let result = new TPromise<any>((c, e) => {
 			reply.c = c;
 			reply.e = e;
-		}, () => {
-			// Cancel not supported
 		});
 		this._pendingReplies[req] = reply;
 
@@ -116,7 +113,7 @@ class SimpleWorkerProtocol {
 		} catch (e) {
 			// nothing
 		}
-		if (!message.vsWorker) {
+		if (!message || !message.vsWorker) {
 			return;
 		}
 		if (this._workerId !== -1 && message.vsWorker !== this._workerId) {
@@ -163,6 +160,10 @@ class SimpleWorkerProtocol {
 				err: undefined
 			});
 		}, (e) => {
+			if (e.detail instanceof Error) {
+				// Loading errors have a detail property that points to the actual error
+				e.detail = transformErrorForSerialization(e.detail);
+			}
 			this._send({
 				vsWorker: this._workerId,
 				seq: req,
@@ -188,7 +189,6 @@ export class SimpleWorkerClient<T> extends Disposable {
 	private _onModuleLoaded: TPromise<string[]>;
 	private _protocol: SimpleWorkerProtocol;
 	private _lazyProxy: TPromise<T>;
-	private _lastRequestTimestamp = -1;
 
 	constructor(workerFactory: IWorkerFactory, moduleId: string) {
 		super();
@@ -221,19 +221,18 @@ export class SimpleWorkerClient<T> extends Disposable {
 
 		// Gather loader configuration
 		let loaderConfiguration: any = null;
-		let globalRequire = (<any>self).require;
-		if (typeof globalRequire.getConfig === 'function') {
+		if (typeof (<any>self).require !== 'undefined' && typeof (<any>self).require.getConfig === 'function') {
 			// Get the configuration from the Monaco AMD Loader
-			loaderConfiguration = globalRequire.getConfig();
+			loaderConfiguration = (<any>self).require.getConfig();
 		} else if (typeof (<any>self).requirejs !== 'undefined') {
 			// Get the configuration from requirejs
 			loaderConfiguration = (<any>self).requirejs.s.contexts._.config;
 		}
 
-		this._lazyProxy = new TPromise<T>((c, e, p) => {
+		this._lazyProxy = new TPromise<T>((c, e) => {
 			lazyProxyFulfill = c;
 			lazyProxyReject = e;
-		}, () => { /* no cancel */ });
+		});
 
 		// Send initialize message
 		this._onModuleLoaded = this._protocol.sendMessage(INITIALIZE, [
@@ -244,7 +243,7 @@ export class SimpleWorkerClient<T> extends Disposable {
 		this._onModuleLoaded.then((availableMethods: string[]) => {
 			let proxy = <T>{};
 			for (let i = 0; i < availableMethods.length; i++) {
-				proxy[availableMethods[i]] = createProxyMethod(availableMethods[i], proxyMethodRequest);
+				(proxy as any)[availableMethods[i]] = createProxyMethod(availableMethods[i], proxyMethodRequest);
 			}
 			lazyProxyFulfill(proxy);
 		}, (e) => {
@@ -266,22 +265,14 @@ export class SimpleWorkerClient<T> extends Disposable {
 	}
 
 	public getProxyObject(): TPromise<T> {
-		// Do not allow chaining promises to cancel the proxy creation
-		return new ShallowCancelThenPromise(this._lazyProxy);
-	}
-
-	public getLastRequestTimestamp(): number {
-		return this._lastRequestTimestamp;
+		return this._lazyProxy;
 	}
 
 	private _request(method: string, args: any[]): TPromise<any> {
-		return new TPromise<any>((c, e, p) => {
+		return new TPromise<any>((c, e) => {
 			this._onModuleLoaded.then(() => {
-				this._lastRequestTimestamp = Date.now();
 				this._protocol.sendMessage(method, args).then(c, e);
 			}, e);
-		}, () => {
-			// Cancel intentionally not supported
 		});
 	}
 
@@ -292,7 +283,8 @@ export class SimpleWorkerClient<T> extends Disposable {
 }
 
 export interface IRequestHandler {
-	_requestHandlerTrait: any;
+	_requestHandlerBrand: any;
+	[prop: string]: any;
 }
 
 /**
@@ -300,10 +292,11 @@ export interface IRequestHandler {
  */
 export class SimpleWorkerServer {
 
-	private _protocol: SimpleWorkerProtocol;
 	private _requestHandler: IRequestHandler;
+	private _protocol: SimpleWorkerProtocol;
 
-	constructor(postSerializedMessage: (msg: string) => void) {
+	constructor(postSerializedMessage: (msg: string) => void, requestHandler: IRequestHandler) {
+		this._requestHandler = requestHandler;
 		this._protocol = new SimpleWorkerProtocol({
 			sendMessage: (msg: string): void => {
 				postSerializedMessage(msg);
@@ -335,6 +328,17 @@ export class SimpleWorkerServer {
 	private initialize(workerId: number, moduleId: string, loaderConfig: any): TPromise<any> {
 		this._protocol.setWorkerId(workerId);
 
+		if (this._requestHandler) {
+			// static request handler
+			let methods: string[] = [];
+			for (let prop in this._requestHandler) {
+				if (typeof this._requestHandler[prop] === 'function') {
+					methods.push(prop);
+				}
+			}
+			return TPromise.as(methods);
+		}
+
 		if (loaderConfig) {
 			// Remove 'baseUrl', handling it is beyond scope for now
 			if (typeof loaderConfig.baseUrl !== 'undefined') {
@@ -345,13 +349,6 @@ export class SimpleWorkerServer {
 					delete loaderConfig.paths['vs'];
 				}
 			}
-			let nlsConfig = loaderConfig['vs/nls'];
-			// We need to have pseudo translation
-			if (nlsConfig && nlsConfig.pseudo) {
-				require(['vs/nls'], function (nlsPlugin) {
-					nlsPlugin.setPseudoTranslation(nlsConfig.pseudo);
-				});
-			}
 
 			// Since this is in a web worker, enable catching errors
 			loaderConfig.catchError = true;
@@ -360,7 +357,7 @@ export class SimpleWorkerServer {
 
 		let cc: ValueCallback;
 		let ee: ErrorCallback;
-		let r = new TPromise<any>((c, e, p) => {
+		let r = new TPromise<any>((c, e) => {
 			cc = c;
 			ee = e;
 		});
@@ -388,5 +385,5 @@ export class SimpleWorkerServer {
  * Called on the worker side
  */
 export function create(postMessage: (msg: string) => void): SimpleWorkerServer {
-	return new SimpleWorkerServer(postMessage);
+	return new SimpleWorkerServer(postMessage, null);
 }

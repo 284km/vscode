@@ -1,0 +1,41 @@
+jobs:
+- job: Windows
+  condition: eq(variables['VSCODE_BUILD_WIN32'], 'true')
+  pool:
+    vmImage: VS2017-Win2016
+  variables:
+    VSCODE_ARCH: x64
+  steps:
+  - template: win32/product-build-win32.yml
+
+- job: Windows32
+  condition: eq(variables['VSCODE_BUILD_WIN32_32BIT'], 'true')
+  pool:
+    vmImage: VS2017-Win2016
+  variables:
+    VSCODE_ARCH: ia32
+  steps:
+  - template: win32/product-build-win32.yml
+
+- job: Linux
+  condition: eq(variables['VSCODE_BUILD_LINUX'], 'true')
+  pool: linux-x64
+  variables:
+    VSCODE_ARCH: x64
+  steps:
+  - template: linux/product-build-linux.yml
+
+- job: Linux32
+  condition: eq(variables['VSCODE_BUILD_LINUX_32BIT'], 'true')
+  pool: linux-ia32
+  variables:
+    VSCODE_ARCH: ia32
+  steps:
+  - template: linux/product-build-linux.yml
+
+- job: macOS
+  condition: eq(variables['VSCODE_BUILD_MACOS'], 'true')
+  pool:
+    vmImage: macOS 10.13
+  steps:
+  - template: darwin/product-build-darwin.yml

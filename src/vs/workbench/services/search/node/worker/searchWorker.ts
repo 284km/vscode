@@ -6,19 +6,17 @@
 'use strict';
 
 import * as fs from 'fs';
-import gracefulFs = require('graceful-fs');
-gracefulFs.gracefulify(fs);
-
+import * as gracefulFs from 'graceful-fs';
 import { onUnexpectedError } from 'vs/base/common/errors';
 import * as strings from 'vs/base/common/strings';
 import { TPromise } from 'vs/base/common/winjs.base';
-import { ISerializedFileMatch } from '../search';
-import * as baseMime from 'vs/base/common/mime';
-import { ILineMatch } from 'vs/platform/search/common/search';
-import { UTF16le, UTF16be, UTF8, UTF8_with_bom, encodingExists, decode, bomLength } from 'vs/base/node/encoding';
-import { detectMimeAndEncodingFromBuffer } from 'vs/base/node/mime';
-
+import { bomLength, decode, detectEncodingFromBuffer, encodingExists, UTF16be, UTF16le, UTF8, UTF8_with_bom } from 'vs/base/node/encoding';
+import { Range } from 'vs/editor/common/core/range';
+import { ITextSearchPreviewOptions, TextSearchResult } from 'vs/platform/search/common/search';
+import { FileMatch } from '../search';
 import { ISearchWorker, ISearchWorkerSearchArgs, ISearchWorkerSearchResult } from './searchWorkerIpc';
+
+gracefulFs.gracefulify(fs);
 
 interface ReadLinesOptions {
 	bufferLength: number;
@@ -98,7 +96,7 @@ export class SearchWorkerEngine {
 
 			// Search in the given path, and when it's finished, search in the next path in absolutePaths
 			const startSearchInFile = (absolutePath: string): TPromise<void> => {
-				return this.searchInFile(absolutePath, contentPattern, fileEncoding, args.maxResults && (args.maxResults - result.numMatches)).then(fileResult => {
+				return this.searchInFile(absolutePath, contentPattern, fileEncoding, args.maxResults && (args.maxResults - result.numMatches), args.previewOptions).then(fileResult => {
 					// Finish early if search is canceled
 					if (this.isCanceled) {
 						return;
@@ -127,13 +125,12 @@ export class SearchWorkerEngine {
 		this.isCanceled = true;
 	}
 
-	private searchInFile(absolutePath: string, contentPattern: RegExp, fileEncoding: string, maxResults?: number): TPromise<IFileSearchResult> {
+	private searchInFile(absolutePath: string, contentPattern: RegExp, fileEncoding: string, maxResults?: number, previewOptions?: ITextSearchPreviewOptions): TPromise<IFileSearchResult> {
 		let fileMatch: FileMatch = null;
 		let limitReached = false;
 		let numMatches = 0;
 
 		const perLineCallback = (line: string, lineNumber: number) => {
-			let lineMatch: LineMatch = null;
 			let match = contentPattern.exec(line);
 
 			// Record all matches into file result
@@ -142,12 +139,8 @@ export class SearchWorkerEngine {
 					fileMatch = new FileMatch(absolutePath);
 				}
 
-				if (lineMatch === null) {
-					lineMatch = new LineMatch(line, lineNumber);
-					fileMatch.addMatch(lineMatch);
-				}
-
-				lineMatch.addMatch(match.index, match[0].length);
+				const lineMatch = new TextSearchResult(line, new Range(lineNumber, match.index, lineNumber, match.index + match[0].length), previewOptions);
+				fileMatch.addMatch(lineMatch);
 
 				numMatches++;
 				if (maxResults && numMatches >= maxResults) {
@@ -170,7 +163,7 @@ export class SearchWorkerEngine {
 					return resolve(null);
 				}
 
-				const buffer = new Buffer(options.bufferLength);
+				const buffer = Buffer.allocUnsafe(options.bufferLength);
 				let line = '';
 				let lineNumber = 0;
 				let lastBufferHadTrailingCR = false;
@@ -180,8 +173,8 @@ export class SearchWorkerEngine {
 						return clb(null); // return early if canceled or limit reached
 					}
 
-					fs.read(fd, buffer, 0, buffer.length, null, (error: Error, bytesRead: number, buffer: NodeBuffer) => {
-						const decodeBuffer = (buffer: NodeBuffer, start: number, end: number): string => {
+					fs.read(fd, buffer, 0, buffer.length, null, (error: Error, bytesRead: number, buffer: Buffer) => {
+						const decodeBuffer = (buffer: Buffer, start: number, end: number): string => {
 							if (options.encoding === UTF8 || options.encoding === UTF8_with_bom) {
 								return buffer.toString(undefined, start, end); // much faster to use built in toString() when encoding is default
 							}
@@ -209,13 +202,13 @@ export class SearchWorkerEngine {
 
 						// Detect encoding and mime when this is the beginning of the file
 						if (isFirstRead) {
-							const mimeAndEncoding = detectMimeAndEncodingFromBuffer({ buffer, bytesRead }, false);
-							if (mimeAndEncoding.mimes[mimeAndEncoding.mimes.length - 1] !== baseMime.MIME_TEXT) {
+							const detected = detectEncodingFromBuffer({ buffer, bytesRead }, false);
+							if (detected.seemsBinary) {
 								return clb(null); // skip files that seem binary
 							}
 
 							// Check for BOM offset
-							switch (mimeAndEncoding.encoding) {
+							switch (detected.encoding) {
 								case UTF8:
 									pos = i = bomLength(UTF8);
 									options.encoding = UTF8;
@@ -297,73 +290,5 @@ export class SearchWorkerEngine {
 				});
 			});
 		});
-	}
-}
-
-export class FileMatch implements ISerializedFileMatch {
-	path: string;
-	lineMatches: LineMatch[];
-
-	constructor(path: string) {
-		this.path = path;
-		this.lineMatches = [];
-	}
-
-	addMatch(lineMatch: LineMatch): void {
-		this.lineMatches.push(lineMatch);
-	}
-
-	isEmpty(): boolean {
-		return this.lineMatches.length === 0;
-	}
-
-	serialize(): ISerializedFileMatch {
-		let lineMatches: ILineMatch[] = [];
-		let numMatches = 0;
-
-		for (let i = 0; i < this.lineMatches.length; i++) {
-			numMatches += this.lineMatches[i].offsetAndLengths.length;
-			lineMatches.push(this.lineMatches[i].serialize());
-		}
-
-		return {
-			path: this.path,
-			lineMatches,
-			numMatches
-		};
-	}
-}
-
-export class LineMatch implements ILineMatch {
-	preview: string;
-	lineNumber: number;
-	offsetAndLengths: number[][];
-
-	constructor(preview: string, lineNumber: number) {
-		this.preview = preview.replace(/(\r|\n)*$/, '');
-		this.lineNumber = lineNumber;
-		this.offsetAndLengths = [];
-	}
-
-	getText(): string {
-		return this.preview;
-	}
-
-	getLineNumber(): number {
-		return this.lineNumber;
-	}
-
-	addMatch(offset: number, length: number): void {
-		this.offsetAndLengths.push([offset, length]);
-	}
-
-	serialize(): ILineMatch {
-		const result = {
-			preview: this.preview,
-			lineNumber: this.lineNumber,
-			offsetAndLengths: this.offsetAndLengths
-		};
-
-		return result;
 	}
 }

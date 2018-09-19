@@ -5,18 +5,22 @@
 
 import { IViewlet } from 'vs/workbench/common/viewlet';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import Event from 'vs/base/common/event';
+import { Event } from 'vs/base/common/event';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { IPager } from 'vs/base/common/paging';
-import { IQueryOptions, IExtensionManifest, LocalExtensionType } from 'vs/platform/extensionManagement/common/extensionManagement';
+import { IQueryOptions, IExtensionManifest, LocalExtensionType, EnablementState, ILocalExtension, IGalleryExtension } from 'vs/platform/extensionManagement/common/extensionManagement';
+import { IViewContainersRegistry, ViewContainer, Extensions as ViewContainerExtensions } from 'vs/workbench/common/views';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 export const VIEWLET_ID = 'workbench.view.extensions';
+export const VIEW_CONTAINER: ViewContainer = Registry.as<IViewContainersRegistry>(ViewContainerExtensions.ViewContainersRegistry).registerViewContainer(VIEWLET_ID);
 
 export interface IExtensionsViewlet extends IViewlet {
 	search(text: string): void;
 }
 
-export enum ExtensionState {
+export const enum ExtensionState {
 	Installing,
 	Installed,
 	Uninstalling,
@@ -29,12 +33,14 @@ export interface IExtension {
 	name: string;
 	displayName: string;
 	id: string;
+	uuid: string;
 	publisher: string;
 	publisherDisplayName: string;
 	version: string;
 	latestVersion: string;
 	description: string;
 	url: string;
+	repository: string;
 	iconUrl: string;
 	iconUrlFallback: string;
 	licenseUrl: string;
@@ -42,13 +48,20 @@ export interface IExtension {
 	rating: number;
 	ratingCount: number;
 	outdated: boolean;
-	disabledGlobally: boolean;
-	disabledForWorkspace: boolean;
+	enablementState: EnablementState;
 	dependencies: string[];
+	extensionPack: string[];
 	telemetryData: any;
-	getManifest(): TPromise<IExtensionManifest>;
-	getReadme(): TPromise<string>;
-	getChangelog(): TPromise<string>;
+	preview: boolean;
+	getManifest(token: CancellationToken): TPromise<IExtensionManifest | undefined>;
+	getReadme(token: CancellationToken): TPromise<string>;
+	hasReadme(): boolean;
+	getChangelog(token: CancellationToken): TPromise<string>;
+	hasChangelog(): boolean;
+	local?: ILocalExtension;
+	locals?: ILocalExtension[];
+	gallery?: IGalleryExtension;
+	isMalicious: boolean;
 }
 
 export interface IExtensionDependencies {
@@ -65,7 +78,7 @@ export const IExtensionsWorkbenchService = createDecorator<IExtensionsWorkbenchS
 
 export interface IExtensionsWorkbenchService {
 	_serviceBrand: any;
-	onChange: Event<void>;
+	onChange: Event<IExtension | undefined>;
 	local: IExtension[];
 	queryLocal(): TPromise<IExtension[]>;
 	queryGallery(options?: IQueryOptions): TPromise<IPager<IExtension>>;
@@ -73,8 +86,9 @@ export interface IExtensionsWorkbenchService {
 	install(vsix: string): TPromise<void>;
 	install(extension: IExtension, promptToInstallDependencies?: boolean): TPromise<void>;
 	uninstall(extension: IExtension): TPromise<void>;
-	setEnablement(extension: IExtension, enable: boolean, workspace?: boolean): TPromise<void>;
-	loadDependencies(extension: IExtension): TPromise<IExtensionDependencies>;
+	reinstall(extension: IExtension): TPromise<void>;
+	setEnablement(extensions: IExtension | IExtension[], enablementState: EnablementState): TPromise<void>;
+	loadDependencies(extension: IExtension, token: CancellationToken): TPromise<IExtensionDependencies>;
 	open(extension: IExtension, sideByside?: boolean): TPromise<any>;
 	checkForUpdates(): TPromise<void>;
 	allowedBadgeProviders: string[];
@@ -82,8 +96,14 @@ export interface IExtensionsWorkbenchService {
 
 export const ConfigurationKey = 'extensions';
 export const AutoUpdateConfigurationKey = 'extensions.autoUpdate';
+export const AutoCheckUpdatesConfigurationKey = 'extensions.autoCheckUpdates';
+export const ShowRecommendationsOnlyOnDemandKey = 'extensions.showRecommendationsOnlyOnDemand';
+export const CloseExtensionDetailsOnViewChangeKey = 'extensions.closeExtensionDetailsOnViewChange';
 
 export interface IExtensionsConfiguration {
 	autoUpdate: boolean;
+	autoCheckUpdates: boolean;
 	ignoreRecommendations: boolean;
+	showRecommendationsOnlyOnDemand: boolean;
+	closeExtensionDetailsOnViewChange: boolean;
 }

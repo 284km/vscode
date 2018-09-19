@@ -7,20 +7,20 @@
 
 import { localize } from 'vs/nls';
 import { basename } from 'vs/base/common/paths';
-import { IDisposable, dispose, empty as EmptyDisposable, combinedDisposable } from 'vs/base/common/lifecycle';
-import { filterEvent, any as anyEvent } from 'vs/base/common/event';
+import { IDisposable, dispose, Disposable, combinedDisposable } from 'vs/base/common/lifecycle';
+import { filterEvent, anyEvent as anyEvent } from 'vs/base/common/event';
 import { VIEWLET_ID } from 'vs/workbench/parts/scm/common/scm';
 import { ISCMService, ISCMRepository } from 'vs/workbench/services/scm/common/scm';
 import { IActivityService, NumberBadge } from 'vs/workbench/services/activity/common/activity';
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
 import { IContextKeyService, IContextKey } from 'vs/platform/contextkey/common/contextkey';
 import { IStatusbarService, StatusbarAlignment as MainThreadStatusBarAlignment } from 'vs/platform/statusbar/common/statusbar';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { commonPrefixLength } from 'vs/base/common/strings';
 
 export class StatusUpdater implements IWorkbenchContribution {
 
-	private static ID = 'vs.scm.statusUpdater';
-
-	private badgeDisposable: IDisposable = EmptyDisposable;
+	private badgeDisposable: IDisposable = Disposable.None;
 	private disposables: IDisposable[] = [];
 
 	constructor(
@@ -47,10 +47,6 @@ export class StatusUpdater implements IWorkbenchContribution {
 		this.disposables.push(disposable);
 	}
 
-	getId(): string {
-		return StatusUpdater.ID;
-	}
-
 	private render(): void {
 		this.badgeDisposable.dispose();
 
@@ -58,7 +54,7 @@ export class StatusUpdater implements IWorkbenchContribution {
 			if (typeof repository.provider.count === 'number') {
 				return r + repository.provider.count;
 			} else {
-				return r + repository.provider.resources.reduce<number>((r, g) => r + g.resourceCollection.resources.length, 0);
+				return r + repository.provider.groups.elements.reduce<number>((r, g) => r + g.elements.length, 0);
 			}
 		}, 0);
 
@@ -66,7 +62,7 @@ export class StatusUpdater implements IWorkbenchContribution {
 			const badge = new NumberBadge(count, num => localize('scmPendingChangesBadge', '{0} pending changes', num));
 			this.badgeDisposable = this.activityService.showActivity(VIEWLET_ID, badge, 'scm-viewlet-label');
 		} else {
-			this.badgeDisposable = EmptyDisposable;
+			this.badgeDisposable = Disposable.None;
 		}
 	}
 
@@ -78,10 +74,8 @@ export class StatusUpdater implements IWorkbenchContribution {
 
 export class StatusBarController implements IWorkbenchContribution {
 
-	private static ID = 'vs.scm.statusBarController';
-
-	private statusBarDisposable: IDisposable = EmptyDisposable;
-	private focusDisposable: IDisposable = EmptyDisposable;
+	private statusBarDisposable: IDisposable = Disposable.None;
+	private focusDisposable: IDisposable = Disposable.None;
 	private focusedRepository: ISCMRepository | undefined = undefined;
 	private focusedProviderContextKey: IContextKey<string | undefined>;
 	private disposables: IDisposable[] = [];
@@ -89,18 +83,52 @@ export class StatusBarController implements IWorkbenchContribution {
 	constructor(
 		@ISCMService private scmService: ISCMService,
 		@IStatusbarService private statusbarService: IStatusbarService,
-		@IContextKeyService contextKeyService: IContextKeyService
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@IEditorService private editorService: IEditorService
 	) {
 		this.focusedProviderContextKey = contextKeyService.createKey<string | undefined>('scmProvider', void 0);
 		this.scmService.onDidAddRepository(this.onDidAddRepository, this, this.disposables);
 
-		if (this.scmService.repositories.length > 0) {
-			this.onDidFocusRepository(this.scmService.repositories[0]);
+		for (const repository of this.scmService.repositories) {
+			this.onDidAddRepository(repository);
 		}
+
+		editorService.onDidActiveEditorChange(this.onDidActiveEditorChange, this, this.disposables);
 	}
 
-	getId(): string {
-		return StatusBarController.ID;
+	private onDidActiveEditorChange(): void {
+		if (!this.editorService.activeEditor) {
+			return;
+		}
+
+		const resource = this.editorService.activeEditor.getResource();
+
+		if (!resource || resource.scheme !== 'file') {
+			return;
+		}
+
+		let bestRepository: ISCMRepository | null = null;
+		let bestMatchLength = Number.NEGATIVE_INFINITY;
+
+		for (const repository of this.scmService.repositories) {
+			const root = repository.provider.rootUri;
+
+			if (!root) {
+				continue;
+			}
+
+			const rootFSPath = root.fsPath;
+			const prefixLength = commonPrefixLength(rootFSPath, resource.fsPath);
+
+			if (prefixLength === rootFSPath.length && prefixLength > bestMatchLength) {
+				bestRepository = repository;
+				bestMatchLength = prefixLength;
+			}
+		}
+
+		if (bestRepository) {
+			this.onDidFocusRepository(bestRepository);
+		}
 	}
 
 	private onDidAddRepository(repository: ISCMRepository): void {
@@ -111,7 +139,7 @@ export class StatusBarController implements IWorkbenchContribution {
 			this.disposables = this.disposables.filter(d => d !== removeDisposable);
 
 			if (this.scmService.repositories.length === 0) {
-				this.focusedProviderContextKey.set(undefined);
+				this.onDidFocusRepository(undefined);
 			} else if (this.focusedRepository === repository) {
 				this.scmService.repositories[0].focus();
 			}
@@ -120,24 +148,33 @@ export class StatusBarController implements IWorkbenchContribution {
 		const disposable = combinedDisposable([changeDisposable, removeDisposable]);
 		this.disposables.push(disposable);
 
-		if (this.scmService.repositories.length === 1) {
+		if (!this.focusedRepository) {
 			this.onDidFocusRepository(repository);
 		}
 	}
 
-	private onDidFocusRepository(repository: ISCMRepository): void {
-		if (this.focusedRepository !== repository) {
-			this.focusedRepository = repository;
-			this.focusedProviderContextKey.set(repository.provider.id);
+	private onDidFocusRepository(repository: ISCMRepository | undefined): void {
+		if (this.focusedRepository === repository) {
+			return;
 		}
 
+		this.focusedRepository = repository;
+		this.focusedProviderContextKey.set(repository && repository.provider.id);
 		this.focusDisposable.dispose();
-		this.focusDisposable = repository.provider.onDidChange(() => this.render(repository));
+
+		if (repository) {
+			this.focusDisposable = repository.provider.onDidChange(() => this.render(repository));
+		}
+
 		this.render(repository);
 	}
 
-	private render(repository: ISCMRepository): void {
+	private render(repository: ISCMRepository | undefined): void {
 		this.statusBarDisposable.dispose();
+
+		if (!repository) {
+			return;
+		}
 
 		const commands = repository.provider.statusBarCommands || [];
 		const label = repository.provider.rootUri

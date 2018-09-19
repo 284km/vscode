@@ -1,4 +1,8 @@
 test/**
 src/**
+out/**
 tsconfig.json
-npm-shrinkwrap.json
+extension.webpack.config.js
+CONTRIBUTING.md
+OSSREADME.json
+yarn.lock

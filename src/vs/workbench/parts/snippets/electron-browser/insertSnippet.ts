@@ -5,18 +5,18 @@
 'use strict';
 
 import * as nls from 'vs/nls';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { ICommonCodeEditor } from 'vs/editor/common/editorCommon';
-import { editorAction, ServicesAccessor, EditorAction } from 'vs/editor/common/editorCommonExtensions';
-import { IQuickOpenService, IPickOpenEntry } from 'vs/platform/quickOpen/common/quickOpen';
+import { registerEditorAction, ServicesAccessor, EditorAction } from 'vs/editor/browser/editorExtensions';
 import { IModeService } from 'vs/editor/common/services/modeService';
 import { LanguageId } from 'vs/editor/common/modes';
 import { ICommandService, CommandsRegistry } from 'vs/platform/commands/common/commands';
-import { ISnippetsService, Snippet } from 'vs/workbench/parts/snippets/electron-browser/snippets.contribution';
-import { SnippetController2 } from 'vs/editor/contrib/snippet/browser/snippetController2';
+import { ISnippetsService } from 'vs/workbench/parts/snippets/electron-browser/snippets.contribution';
+import { SnippetController2 } from 'vs/editor/contrib/snippet/snippetController2';
 import { EditorContextKeys } from 'vs/editor/common/editorContextKeys';
+import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { Snippet } from 'vs/workbench/parts/snippets/electron-browser/snippetsFile';
+import { IQuickPickItem, IQuickInputService, QuickPickInput } from 'vs/platform/quickinput/common/quickInput';
 
-interface ISnippetPick extends IPickOpenEntry {
+interface ISnippetPick extends IQuickPickItem {
 	snippet: Snippet;
 }
 
@@ -39,7 +39,7 @@ class Args {
 		return new Args(snippet, name, langId);
 	}
 
-	private static _empty = new Args(undefined, undefined, undefined);
+	private static readonly _empty = new Args(undefined, undefined, undefined);
 
 	private constructor(
 		public readonly snippet: string,
@@ -51,7 +51,6 @@ class Args {
 
 }
 
-@editorAction
 class InsertSnippetAction extends EditorAction {
 
 	constructor() {
@@ -63,7 +62,7 @@ class InsertSnippetAction extends EditorAction {
 		});
 	}
 
-	public run(accessor: ServicesAccessor, editor: ICommonCodeEditor, arg: any): TPromise<void> {
+	public run(accessor: ServicesAccessor, editor: ICodeEditor, arg: any): Promise<void> {
 		const modeService = accessor.get(IModeService);
 		const snippetService = accessor.get(ISnippetsService);
 
@@ -71,20 +70,21 @@ class InsertSnippetAction extends EditorAction {
 			return undefined;
 		}
 
-		const quickOpenService = accessor.get(IQuickOpenService);
+		const quickInputService = accessor.get(IQuickInputService);
 		const { lineNumber, column } = editor.getPosition();
 		let { snippet, name, langId } = Args.fromUser(arg);
 
-		return new TPromise<Snippet>(async (resolve, reject) => {
+		return new Promise<Snippet>(async (resolve, reject) => {
 
 			if (snippet) {
-				return resolve({
-					codeSnippet: snippet,
-					description: undefined,
-					name: undefined,
-					source: undefined,
-					prefix: undefined
-				});
+				return resolve(new Snippet(
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					snippet,
+					undefined
+				));
 			}
 
 			let languageId: LanguageId;
@@ -115,7 +115,7 @@ class InsertSnippetAction extends EditorAction {
 			} else {
 				// let user pick a snippet
 				const snippets = (await snippetService.getSnippets(languageId)).sort(Snippet.compare);
-				const picks: ISnippetPick[] = [];
+				const picks: QuickPickInput<ISnippetPick>[] = [];
 				let prevSnippet: Snippet;
 				for (const snippet of snippets) {
 					const pick: ISnippetPick = {
@@ -124,14 +124,14 @@ class InsertSnippetAction extends EditorAction {
 						snippet
 					};
 					if (!snippet.isFromExtension && !prevSnippet) {
-						pick.separator = { label: nls.localize('sep.userSnippet', "User Snippets") };
+						picks.push({ type: 'separator', label: nls.localize('sep.userSnippet', "User Snippets") });
 					} else if (snippet.isFromExtension && (!prevSnippet || !prevSnippet.isFromExtension)) {
-						pick.separator = { label: nls.localize('sep.extSnippet', "Extension Snippets") };
+						picks.push({ type: 'separator', label: nls.localize('sep.extSnippet', "Extension Snippets") });
 					}
 					picks.push(pick);
 					prevSnippet = snippet;
 				}
-				return quickOpenService.pick(picks, { matchOnDetail: true }).then(pick => resolve(pick && pick.snippet), reject);
+				return quickInputService.pick(picks, { matchOnDetail: true }).then(pick => resolve(pick && pick.snippet), reject);
 			}
 		}).then(snippet => {
 			if (snippet) {
@@ -140,6 +140,8 @@ class InsertSnippetAction extends EditorAction {
 		});
 	}
 }
+
+registerEditorAction(InsertSnippetAction);
 
 // compatibility command to make sure old keybinding are still working
 CommandsRegistry.registerCommand('editor.action.showSnippets', accessor => {

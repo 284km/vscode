@@ -7,7 +7,7 @@
 import { Position } from 'vs/editor/common/core/position';
 import { CharCode } from 'vs/base/common/charCode';
 import * as strings from 'vs/base/common/strings';
-import { ICommand, TextModelResolvedOptions, IConfiguration, IModel, ScrollType } from 'vs/editor/common/editorCommon';
+import { ICommand, IConfiguration, ScrollType } from 'vs/editor/common/editorCommon';
 import { TextModel } from 'vs/editor/common/model/textModel';
 import { Selection, ISelection } from 'vs/editor/common/core/selection';
 import { Range } from 'vs/editor/common/core/range';
@@ -15,10 +15,11 @@ import { LanguageConfigurationRegistry } from 'vs/editor/common/modes/languageCo
 import { onUnexpectedError } from 'vs/base/common/errors';
 import { LanguageIdentifier } from 'vs/editor/common/modes';
 import { IAutoClosingPair } from 'vs/editor/common/modes/languageConfiguration';
-import { IConfigurationChangedEvent } from 'vs/editor/common/config/editorOptions';
+import { IConfigurationChangedEvent, EditorAutoClosingStrategy, EditorAutoSurroundStrategy } from 'vs/editor/common/config/editorOptions';
 import { IViewModel } from 'vs/editor/common/viewModel/viewModel';
 import { CursorChangeReason } from 'vs/editor/common/controller/cursorEvents';
 import { VerticalRevealType } from 'vs/editor/common/view/viewEvents';
+import { TextModelResolvedOptions, ITextModel } from 'vs/editor/common/model';
 
 export interface IColumnSelectData {
 	toViewLineNumber: number;
@@ -65,6 +66,10 @@ export interface CharacterMap {
 	[char: string]: string;
 }
 
+const autoCloseAlways = _ => true;
+const autoCloseNever = _ => false;
+const autoCloseBeforeWhitespace = (chr: string) => (chr === ' ' || chr === '\t');
+
 export class CursorConfiguration {
 	_cursorMoveConfigurationBrand: void;
 
@@ -77,19 +82,29 @@ export class CursorConfiguration {
 	public readonly useTabStops: boolean;
 	public readonly wordSeparators: string;
 	public readonly emptySelectionClipboard: boolean;
-	public readonly autoClosingBrackets: boolean;
+	public readonly copyWithSyntaxHighlighting: boolean;
+	public readonly multiCursorMergeOverlapping: boolean;
+	public readonly autoClosingBrackets: EditorAutoClosingStrategy;
+	public readonly autoClosingQuotes: EditorAutoClosingStrategy;
+	public readonly autoSurround: EditorAutoSurroundStrategy;
 	public readonly autoIndent: boolean;
 	public readonly autoClosingPairsOpen: CharacterMap;
 	public readonly autoClosingPairsClose: CharacterMap;
 	public readonly surroundingPairs: CharacterMap;
-	public readonly electricChars: { [key: string]: boolean; };
+	public readonly shouldAutoCloseBefore: { quote: (ch: string) => boolean, bracket: (ch: string) => boolean };
+
+	private readonly _languageIdentifier: LanguageIdentifier;
+	private _electricChars: { [key: string]: boolean; };
 
 	public static shouldRecreate(e: IConfigurationChangedEvent): boolean {
 		return (
 			e.layoutInfo
 			|| e.wordSeparators
 			|| e.emptySelectionClipboard
+			|| e.multiCursorMergeOverlapping
 			|| e.autoClosingBrackets
+			|| e.autoClosingQuotes
+			|| e.autoSurround
 			|| e.useTabStops
 			|| e.lineHeight
 			|| e.readOnly
@@ -102,31 +117,35 @@ export class CursorConfiguration {
 		modelOptions: TextModelResolvedOptions,
 		configuration: IConfiguration
 	) {
+		this._languageIdentifier = languageIdentifier;
+
 		let c = configuration.editor;
 
 		this.readOnly = c.readOnly;
 		this.tabSize = modelOptions.tabSize;
 		this.insertSpaces = modelOptions.insertSpaces;
 		this.oneIndent = oneIndent;
-		this.pageSize = Math.floor(c.layoutInfo.height / c.fontInfo.lineHeight) - 2;
+		this.pageSize = Math.max(1, Math.floor(c.layoutInfo.height / c.fontInfo.lineHeight) - 2);
 		this.lineHeight = c.lineHeight;
 		this.useTabStops = c.useTabStops;
 		this.wordSeparators = c.wordSeparators;
 		this.emptySelectionClipboard = c.emptySelectionClipboard;
+		this.copyWithSyntaxHighlighting = c.copyWithSyntaxHighlighting;
+		this.multiCursorMergeOverlapping = c.multiCursorMergeOverlapping;
 		this.autoClosingBrackets = c.autoClosingBrackets;
+		this.autoClosingQuotes = c.autoClosingQuotes;
+		this.autoSurround = c.autoSurround;
 		this.autoIndent = c.autoIndent;
 
 		this.autoClosingPairsOpen = {};
 		this.autoClosingPairsClose = {};
 		this.surroundingPairs = {};
-		this.electricChars = {};
+		this._electricChars = null;
 
-		let electricChars = CursorConfiguration._getElectricCharacters(languageIdentifier);
-		if (electricChars) {
-			for (let i = 0; i < electricChars.length; i++) {
-				this.electricChars[electricChars[i]] = true;
-			}
-		}
+		this.shouldAutoCloseBefore = {
+			quote: CursorConfiguration._getShouldAutoClose(languageIdentifier, this.autoClosingQuotes),
+			bracket: CursorConfiguration._getShouldAutoClose(languageIdentifier, this.autoClosingBrackets)
+		};
 
 		let autoClosingPairs = CursorConfiguration._getAutoClosingPairs(languageIdentifier);
 		if (autoClosingPairs) {
@@ -142,6 +161,19 @@ export class CursorConfiguration {
 				this.surroundingPairs[surroundingPairs[i].open] = surroundingPairs[i].close;
 			}
 		}
+	}
+
+	public get electricChars() {
+		if (!this._electricChars) {
+			this._electricChars = {};
+			let electricChars = CursorConfiguration._getElectricCharacters(this._languageIdentifier);
+			if (electricChars) {
+				for (let i = 0; i < electricChars.length; i++) {
+					this._electricChars[electricChars[i]] = true;
+				}
+			}
+		}
+		return this._electricChars;
 	}
 
 	public normalizeIndentation(str: string): string {
@@ -163,6 +195,29 @@ export class CursorConfiguration {
 		} catch (e) {
 			onUnexpectedError(e);
 			return null;
+		}
+	}
+
+	private static _getShouldAutoClose(languageIdentifier: LanguageIdentifier, autoCloseConfig: EditorAutoClosingStrategy): (ch: string) => boolean {
+		switch (autoCloseConfig) {
+			case 'beforeWhitespace':
+				return autoCloseBeforeWhitespace;
+			case 'languageDefined':
+				return CursorConfiguration._getLanguageDefinedShouldAutoClose(languageIdentifier);
+			case 'always':
+				return autoCloseAlways;
+			case 'never':
+				return autoCloseNever;
+		}
+	}
+
+	private static _getLanguageDefinedShouldAutoClose(languageIdentifier: LanguageIdentifier): (ch: string) => boolean {
+		try {
+			const autoCloseBeforeSet = LanguageConfigurationRegistry.getAutoCloseBeforeSet(languageIdentifier.id);
+			return c => autoCloseBeforeSet.indexOf(c) !== -1;
+		} catch (e) {
+			onUnexpectedError(e);
+			return autoCloseNever;
 		}
 	}
 
@@ -279,11 +334,11 @@ export class SingleCursorState {
 export class CursorContext {
 	_cursorContextBrand: void;
 
-	public readonly model: IModel;
+	public readonly model: ITextModel;
 	public readonly viewModel: IViewModel;
 	public readonly config: CursorConfiguration;
 
-	constructor(configuration: IConfiguration, model: IModel, viewModel: IViewModel) {
+	constructor(configuration: IConfiguration, model: ITextModel, viewModel: IViewModel) {
 		this.model = model;
 		this.viewModel = viewModel;
 		this.config = new CursorConfiguration(
@@ -335,11 +390,6 @@ export class CursorContext {
 		return this.viewModel.getCompletelyVisibleViewRangeAtScrollTop(scrollTop);
 	}
 
-	public getCompletelyVisibleModelRangeAtScrollTop(scrollTop: number): Range {
-		const viewRange = this.viewModel.getCompletelyVisibleViewRangeAtScrollTop(scrollTop);
-		return this.viewModel.coordinatesConverter.convertViewRangeToModelRange(viewRange);
-	}
-
 	public getVerticalOffsetForViewLine(viewLineNumber: number): number {
 		return this.viewModel.viewLayout.getVerticalOffsetForLineNumber(viewLineNumber);
 	}
@@ -374,50 +424,6 @@ export class CursorState {
 			states[i] = this.fromModelSelection(modelSelections[i]);
 		}
 		return states;
-	}
-
-	public static ensureInEditableRange(context: CursorContext, states: CursorState[]): CursorState[] {
-		const model = context.model;
-		if (!model.hasEditableRange()) {
-			return states;
-		}
-
-		const modelEditableRange = model.getEditableRange();
-		const viewEditableRange = context.convertModelRangeToViewRange(modelEditableRange);
-
-		let result: CursorState[] = [];
-		for (let i = 0, len = states.length; i < len; i++) {
-			const state = states[i];
-
-			if (state.modelState) {
-				const newModelState = CursorState._ensureInEditableRange(state.modelState, modelEditableRange);
-				result[i] = newModelState ? CursorState.fromModelState(newModelState) : state;
-			} else {
-				const newViewState = CursorState._ensureInEditableRange(state.viewState, viewEditableRange);
-				result[i] = newViewState ? CursorState.fromViewState(newViewState) : state;
-			}
-		}
-		return result;
-	}
-
-	private static _ensureInEditableRange(state: SingleCursorState, editableRange: Range): SingleCursorState {
-		const position = state.position;
-
-		if (position.lineNumber < editableRange.startLineNumber || (position.lineNumber === editableRange.startLineNumber && position.column < editableRange.startColumn)) {
-			return new SingleCursorState(
-				state.selectionStart, state.selectionStartLeftoverVisibleColumns,
-				new Position(editableRange.startLineNumber, editableRange.startColumn), 0
-			);
-		}
-
-		if (position.lineNumber > editableRange.endLineNumber || (position.lineNumber === editableRange.endLineNumber && position.column > editableRange.endColumn)) {
-			return new SingleCursorState(
-				state.selectionStart, state.selectionStartLeftoverVisibleColumns,
-				new Position(editableRange.endLineNumber, editableRange.endColumn), 0
-			);
-		}
-
-		return null;
 	}
 
 	readonly modelState: SingleCursorState;
@@ -492,6 +498,8 @@ export class CursorColumns {
 			let charCode = lineContent.charCodeAt(i);
 			if (charCode === CharCode.Tab) {
 				result = this.nextTabStop(result, tabSize);
+			} else if (strings.isFullWidthCharacter(charCode)) {
+				result = result + 2;
 			} else {
 				result = result + 1;
 			}
@@ -517,6 +525,8 @@ export class CursorColumns {
 			let afterVisibleColumn: number;
 			if (charCode === CharCode.Tab) {
 				afterVisibleColumn = this.nextTabStop(beforeVisibleColumn, tabSize);
+			} else if (strings.isFullWidthCharacter(charCode)) {
+				afterVisibleColumn = beforeVisibleColumn + 2;
 			} else {
 				afterVisibleColumn = beforeVisibleColumn + 1;
 			}
@@ -567,4 +577,8 @@ export class CursorColumns {
 	public static prevTabStop(column: number, tabSize: number): number {
 		return column - 1 - (column - 1) % tabSize;
 	}
+}
+
+export function isQuote(ch: string): boolean {
+	return (ch === '\'' || ch === '"' || ch === '`');
 }

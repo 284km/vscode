@@ -4,32 +4,35 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import { ModelDecorationOptions } from 'vs/editor/common/model/textModelWithDecorations';
+import { ModelDecorationOptions } from 'vs/editor/common/model/textModel';
 import { Range } from 'vs/editor/common/core/range';
-import { IModelDecoration } from 'vs/editor/common/editorCommon';
+import { IModelDecoration, TrackedRangeStickiness as ActualTrackedRangeStickiness } from 'vs/editor/common/model';
 
 //
 // The red-black tree is based on the "Introduction to Algorithms" by Cormen, Leiserson and Rivest.
 //
 
-export const ClassName = {
-	EditorInfoDecoration: 'infosquiggly',
-	EditorWarningDecoration: 'warningsquiggly',
-	EditorErrorDecoration: 'errorsquiggly'
-};
+export const enum ClassName {
+	EditorHintDecoration = 'squiggly-hint',
+	EditorInfoDecoration = 'squiggly-info',
+	EditorWarningDecoration = 'squiggly-warning',
+	EditorErrorDecoration = 'squiggly-error',
+	EditorUnnecessaryDecoration = 'squiggly-unnecessary',
+	EditorUnnecessaryInlineDecoration = 'squiggly-inline-unnecessary'
+}
 
 /**
  * Describes the behavior of decorations when typing/editing near their edges.
  * Note: Please do not edit the values, as they very carefully match `DecorationRangeBehavior`
  */
-export const enum TrackedRangeStickiness {
+const enum TrackedRangeStickiness {
 	AlwaysGrowsWhenTypingAtEdges = 0,
 	NeverGrowsWhenTypingAtEdges = 1,
 	GrowsOnlyWhenTypingBefore = 2,
 	GrowsOnlyWhenTypingAfter = 3,
 }
 
-const enum NodeColor {
+export const enum NodeColor {
 	Black = 0,
 	Red = 1,
 }
@@ -78,7 +81,7 @@ const enum Constants {
 	MAX_SAFE_DELTA = 1 << 30,
 }
 
-function getNodeColor(node: IntervalNode): NodeColor {
+export function getNodeColor(node: IntervalNode): NodeColor {
 	return ((node.metadata & Constants.ColorMask) >>> Constants.ColorOffset);
 }
 function setNodeColor(node: IntervalNode, color: NodeColor): void {
@@ -113,10 +116,13 @@ function setNodeIsInOverviewRuler(node: IntervalNode, value: boolean): void {
 function getNodeStickiness(node: IntervalNode): TrackedRangeStickiness {
 	return ((node.metadata & Constants.StickinessMask) >>> Constants.StickinessOffset);
 }
-function setNodeStickiness(node: IntervalNode, stickiness: TrackedRangeStickiness): void {
+function _setNodeStickiness(node: IntervalNode, stickiness: TrackedRangeStickiness): void {
 	node.metadata = (
 		(node.metadata & Constants.StickinessMaskInverse) | (stickiness << Constants.StickinessOffset)
 	);
+}
+export function setNodeStickiness(node: IntervalNode, stickiness: ActualTrackedRangeStickiness): void {
+	_setNodeStickiness(node, <number>stickiness);
 }
 
 export class IntervalNode implements IModelDecoration {
@@ -162,7 +168,7 @@ export class IntervalNode implements IModelDecoration {
 		this.ownerId = 0;
 		this.options = null;
 		setNodeIsForValidation(this, false);
-		setNodeStickiness(this, TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges);
+		_setNodeStickiness(this, TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges);
 		setNodeIsInOverviewRuler(this, false);
 
 		this.cachedVersionId = 0;
@@ -185,12 +191,14 @@ export class IntervalNode implements IModelDecoration {
 
 	public setOptions(options: ModelDecorationOptions) {
 		this.options = options;
+		let className = this.options.className;
 		setNodeIsForValidation(this, (
-			this.options.className === ClassName.EditorErrorDecoration
-			|| this.options.className === ClassName.EditorWarningDecoration
+			className === ClassName.EditorErrorDecoration
+			|| className === ClassName.EditorWarningDecoration
+			|| className === ClassName.EditorInfoDecoration
 		));
-		setNodeStickiness(this, <number>this.options.stickiness);
-		setNodeIsInOverviewRuler(this, this.options.overviewRuler.color ? true : false);
+		_setNodeStickiness(this, <number>this.options.stickiness);
+		setNodeIsInOverviewRuler(this, (this.options.overviewRuler && this.options.overviewRuler.color) ? true : false);
 	}
 
 	public setCachedOffsets(absoluteStart: number, absoluteEnd: number, cachedVersionId: number): void {
@@ -209,7 +217,7 @@ export class IntervalNode implements IModelDecoration {
 	}
 }
 
-const SENTINEL: IntervalNode = new IntervalNode(null, 0, 0);
+export const SENTINEL: IntervalNode = new IntervalNode(null, 0, 0);
 SENTINEL.parent = SENTINEL;
 SENTINEL.left = SENTINEL;
 SENTINEL.right = SENTINEL;
@@ -237,13 +245,6 @@ export class IntervalTree {
 			return [];
 		}
 		return search(this, filterOwnerId, filterOutValidation, cachedVersionId);
-	}
-
-	public count(): number {
-		if (this.root === SENTINEL) {
-			return 0;
-		}
-		return nodeCount(this);
 	}
 
 	/**
@@ -314,44 +315,8 @@ export class IntervalTree {
 		this._normalizeDeltaIfNecessary();
 	}
 
-	public assertInvariants(): void {
-		assert(getNodeColor(SENTINEL) === NodeColor.Black);
-		assert(SENTINEL.parent === SENTINEL);
-		assert(SENTINEL.left === SENTINEL);
-		assert(SENTINEL.right === SENTINEL);
-		assert(SENTINEL.start === 0);
-		assert(SENTINEL.end === 0);
-		assert(SENTINEL.delta === 0);
-		assert(this.root.parent === SENTINEL);
-		assertValidTree(this);
-	}
-
 	public getAllInOrder(): IntervalNode[] {
 		return search(this, 0, false, 0);
-	}
-
-	public print(): void {
-		if (this.root === SENTINEL) {
-			console.log(`~~ empty`);
-			return;
-		}
-		let out: string[] = [];
-		this._print(this.root, '', 0, out);
-		console.log(out.join(''));
-	}
-
-	private _print(n: IntervalNode, indent: string, delta: number, out: string[]): void {
-		out.push(`${indent}[${getNodeColor(n) === NodeColor.Red ? 'R' : 'B'},${n.delta}, ${n.start}->${n.end}, ${n.maxEnd}] : {${delta + n.start}->${delta + n.end}}, maxEnd: ${n.maxEnd + delta}\n`);
-		if (n.left !== SENTINEL) {
-			this._print(n.left, indent + '    ', delta, out);
-		} else {
-			out.push(`${indent}    NIL\n`);
-		}
-		if (n.right !== SENTINEL) {
-			this._print(n.right, indent + '    ', delta + n.delta, out);
-		} else {
-			out.push(`${indent}    NIL\n`);
-		}
 	}
 
 	private _normalizeDeltaIfNecessary(): void {
@@ -425,13 +390,13 @@ function adjustMarkerBeforeColumn(markerOffset: number, markerStickToPreviousCha
 		return true;
 	}
 	return markerStickToPreviousCharacter;
-};
+}
 
 /**
  * This is a lot more complicated than strictly necessary to maintain the same behaviour
  * as when decorations were implemented using two markers.
  */
-function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLength: number, forceMoveMarkers: boolean): void {
+export function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLength: number, forceMoveMarkers: boolean): void {
 	const nodeStickiness = getNodeStickiness(node);
 	const startStickToPreviousCharacter = (
 		nodeStickiness === TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges
@@ -645,40 +610,6 @@ function noOverlapReplace(T: IntervalTree, start: number, end: number, textLengt
 //#endregion
 
 //#region Searching
-
-function nodeCount(T: IntervalTree): number {
-	let node = T.root;
-	let count = 0;
-	while (node !== SENTINEL) {
-		if (getNodeIsVisited(node)) {
-			// going up from this node
-			setNodeIsVisited(node.left, false);
-			setNodeIsVisited(node.right, false);
-			node = node.parent;
-			continue;
-		}
-
-		if (node.left !== SENTINEL && !getNodeIsVisited(node.left)) {
-			// go left
-			node = node.left;
-			continue;
-		}
-
-		// handle current node
-		count++;
-		setNodeIsVisited(node, true);
-
-		if (node.right !== SENTINEL && !getNodeIsVisited(node.right)) {
-			// go right
-			node = node.right;
-			continue;
-		}
-	}
-
-	setNodeIsVisited(T.root, false);
-
-	return count;
-}
 
 function collectNodesFromOwner(T: IntervalTree, ownerId: number): IntervalNode[] {
 	let node = T.root;
@@ -1304,66 +1235,10 @@ function recomputeMaxEndWalkToRoot(node: IntervalNode): void {
 //#endregion
 
 //#region utils
-function intervalCompare(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+export function intervalCompare(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
 	if (aStart === bStart) {
 		return aEnd - bEnd;
 	}
 	return aStart - bStart;
 }
-//#endregion
-
-//#region Assertion
-
-function depth(n: IntervalNode): number {
-	if (n === SENTINEL) {
-		// The leafs are black
-		return 1;
-	}
-	assert(depth(n.left) === depth(n.right));
-	return (getNodeColor(n) === NodeColor.Black ? 1 : 0) + depth(n.left);
-}
-
-function assertValidNode(n: IntervalNode, delta): void {
-	if (n === SENTINEL) {
-		return;
-	}
-
-	let l = n.left;
-	let r = n.right;
-
-	if (getNodeColor(n) === NodeColor.Red) {
-		assert(getNodeColor(l) === NodeColor.Black);
-		assert(getNodeColor(r) === NodeColor.Black);
-	}
-
-	let expectedMaxEnd = n.end;
-	if (l !== SENTINEL) {
-		assert(intervalCompare(l.start + delta, l.end + delta, n.start + delta, n.end + delta) <= 0);
-		expectedMaxEnd = Math.max(expectedMaxEnd, l.maxEnd);
-	}
-	if (r !== SENTINEL) {
-		assert(intervalCompare(n.start + delta, n.end + delta, r.start + delta + n.delta, r.end + delta + n.delta) <= 0);
-		expectedMaxEnd = Math.max(expectedMaxEnd, r.maxEnd + n.delta);
-	}
-	assert(n.maxEnd === expectedMaxEnd);
-
-	assertValidNode(l, delta);
-	assertValidNode(r, delta + n.delta);
-}
-
-function assertValidTree(tree: IntervalTree): void {
-	if (tree.root === SENTINEL) {
-		return;
-	}
-	assert(getNodeColor(tree.root) === NodeColor.Black);
-	assert(depth(tree.root.left) === depth(tree.root.right));
-	assertValidNode(tree.root, 0);
-}
-
-function assert(condition: boolean): void {
-	if (!condition) {
-		throw new Error('Assertion violation');
-	}
-}
-
 //#endregion

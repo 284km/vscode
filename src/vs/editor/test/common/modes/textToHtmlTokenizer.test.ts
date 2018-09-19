@@ -9,7 +9,7 @@ import { TokenizationRegistry, IState, LanguageIdentifier, ColorId, FontStyle, M
 import { tokenizeToString, tokenizeLineToHTML } from 'vs/editor/common/modes/textToHtmlTokenizer';
 import { MockMode } from 'vs/editor/test/common/mocks/mockMode';
 import { TokenizationResult2 } from 'vs/editor/common/core/token';
-import { ViewLineToken } from 'vs/editor/common/core/viewLineToken';
+import { ViewLineToken, ViewLineTokens } from 'vs/editor/test/common/core/viewLineToken';
 
 suite('Editor Modes - textToHtmlTokenizer', () => {
 	function toStr(pieces: { className: string; text: string }[]): string {
@@ -19,8 +19,9 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 
 	test('TextToHtmlTokenizer 1', () => {
 		let mode = new Mode();
+		let support = TokenizationRegistry.get(mode.getId());
 
-		let actual = tokenizeToString('.abc..def...gh', mode.getId());
+		let actual = tokenizeToString('.abc..def...gh', support);
 		let expected = [
 			{ className: 'mtk7', text: '.' },
 			{ className: 'mtk9', text: 'abc' },
@@ -38,8 +39,9 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 
 	test('TextToHtmlTokenizer 2', () => {
 		let mode = new Mode();
+		let support = TokenizationRegistry.get(mode.getId());
 
-		let actual = tokenizeToString('.abc..def...gh\n.abc..def...gh', mode.getId());
+		let actual = tokenizeToString('.abc..def...gh\n.abc..def...gh', support);
 		let expected1 = [
 			{ className: 'mtk7', text: '.' },
 			{ className: 'mtk9', text: 'abc' },
@@ -67,7 +69,7 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 
 	test('tokenizeLineToHTML', () => {
 		const text = 'Ciao hello world!';
-		const lineTokens = [
+		const lineTokens = new ViewLineTokens([
 			new ViewLineToken(
 				4,
 				(
@@ -100,7 +102,7 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 					| ((FontStyle.Underline) << MetadataConsts.FONT_STYLE_OFFSET)
 				) >>> 0
 			)
-		];
+		]);
 		const colorMap = [null, '#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff'];
 
 		assert.equal(
@@ -197,7 +199,7 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 
 class Mode extends MockMode {
 
-	private static _id = new LanguageIdentifier('textToHtmlTokenizerMode', 3);
+	private static readonly _id = new LanguageIdentifier('textToHtmlTokenizerMode', 3);
 
 	constructor() {
 		super(Mode._id);

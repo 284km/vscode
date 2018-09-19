@@ -6,11 +6,10 @@
 
 import { onUnexpectedError } from 'vs/base/common/errors';
 import * as strings from 'vs/base/common/strings';
-import { CharacterPair, IndentationRule, IndentAction, EnterAction, OnEnterRule } from 'vs/editor/common/modes/languageConfiguration';
+import { CharacterPair, IndentAction, EnterAction, OnEnterRule } from 'vs/editor/common/modes/languageConfiguration';
 
 export interface IOnEnterSupportOptions {
 	brackets?: CharacterPair[];
-	indentationRules?: IndentationRule;
 	regExpRules?: OnEnterRule[];
 }
 
@@ -24,7 +23,6 @@ interface IProcessedBracketPair {
 export class OnEnterSupport {
 
 	private readonly _brackets: IProcessedBracketPair[];
-	private readonly _indentationRules: IndentationRule;
 	private readonly _regExpRules: OnEnterRule[];
 
 	constructor(opts?: IOnEnterSupportOptions) {
@@ -44,23 +42,30 @@ export class OnEnterSupport {
 			};
 		});
 		this._regExpRules = opts.regExpRules || [];
-		this._indentationRules = opts.indentationRules;
 	}
 
 	public onEnter(oneLineAboveText: string, beforeEnterText: string, afterEnterText: string): EnterAction {
 		// (1): `regExpRules`
 		for (let i = 0, len = this._regExpRules.length; i < len; i++) {
 			let rule = this._regExpRules[i];
-			if (rule.beforeText.test(beforeEnterText)) {
-				if (rule.afterText) {
-					if (rule.afterText.test(afterEnterText)) {
-						return rule.action;
-					}
-				} else {
-					return rule.action;
-				}
+			const regResult = [{
+				reg: rule.beforeText,
+				text: beforeEnterText
+			}, {
+				reg: rule.afterText,
+				text: afterEnterText
+			}, {
+				reg: rule.oneLineAboveText,
+				text: oneLineAboveText
+			}].every((obj): boolean => {
+				return obj.reg ? obj.reg.test(obj.text) : true;
+			});
+
+			if (regResult) {
+				return rule.action;
 			}
 		}
+
 
 		// (2): Special indent-outdent
 		if (beforeEnterText.length > 0 && afterEnterText.length > 0) {
@@ -87,7 +92,7 @@ export class OnEnterSupport {
 	}
 
 	private static _createOpenBracketRegExp(bracket: string): RegExp {
-		var str = strings.escapeRegExpCharacters(bracket);
+		let str = strings.escapeRegExpCharacters(bracket);
 		if (!/\B/.test(str.charAt(0))) {
 			str = '\\b' + str;
 		}
@@ -96,7 +101,7 @@ export class OnEnterSupport {
 	}
 
 	private static _createCloseBracketRegExp(bracket: string): RegExp {
-		var str = strings.escapeRegExpCharacters(bracket);
+		let str = strings.escapeRegExpCharacters(bracket);
 		if (!/\B/.test(str.charAt(str.length - 1))) {
 			str = str + '\\b';
 		}
@@ -113,4 +118,3 @@ export class OnEnterSupport {
 		}
 	}
 }
-

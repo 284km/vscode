@@ -5,7 +5,7 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import URI from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { MainContext, MainThreadDiaglogsShape, IMainContext } from 'vs/workbench/api/node/extHost.protocol';
 
 export class ExtHostDialogs {
@@ -13,7 +13,7 @@ export class ExtHostDialogs {
 	private readonly _proxy: MainThreadDiaglogsShape;
 
 	constructor(mainContext: IMainContext) {
-		this._proxy = mainContext.get(MainContext.MainThreadDialogs);
+		this._proxy = mainContext.getProxy(MainContext.MainThreadDialogs);
 	}
 
 	showOpenDialog(options: vscode.OpenDialogOptions): Thenable<URI[]> {

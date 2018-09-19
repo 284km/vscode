@@ -5,11 +5,10 @@
 'use strict';
 
 import { TPromise } from 'vs/base/common/winjs.base';
-import { IDisposable } from 'vs/base/common/lifecycle';
+import { IDisposable, toDisposable } from 'vs/base/common/lifecycle';
 import { TypeConstraint, validateConstraints } from 'vs/base/common/types';
 import { ServicesAccessor, createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import Event from 'vs/base/common/event';
-import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
+import { Event } from 'vs/base/common/event';
 import { LinkedList } from 'vs/base/common/linkedList';
 
 export const ICommandService = createDecorator<ICommandService>('commandService');
@@ -35,7 +34,6 @@ export interface ICommandHandler {
 export interface ICommand {
 	id: string;
 	handler: ICommandHandler;
-	precondition?: ContextKeyExpr;
 	description?: ICommandHandlerDescription;
 }
 
@@ -48,6 +46,7 @@ export interface ICommandHandlerDescription {
 export interface ICommandRegistry {
 	registerCommand(id: string, command: ICommandHandler): IDisposable;
 	registerCommand(command: ICommand): IDisposable;
+	registerCommandAlias(oldId: string, newId: string): IDisposable;
 	getCommand(id: string): ICommand;
 	getCommands(): ICommandsMap;
 }
@@ -93,14 +92,18 @@ export const CommandsRegistry: ICommandRegistry = new class implements ICommandR
 
 		let removeFn = commands.unshift(idOrCommand);
 
-		return {
-			dispose: () => {
-				removeFn();
-				if (this._commands.get(id).isEmpty()) {
-					this._commands.delete(id);
-				}
+		return toDisposable(() => {
+			removeFn();
+			if (this._commands.get(id).isEmpty()) {
+				this._commands.delete(id);
 			}
-		};
+		});
+	}
+
+	registerCommandAlias(oldId: string, newId: string): IDisposable {
+		return CommandsRegistry.registerCommand(oldId, (accessor, ...args) => {
+			accessor.get(ICommandService).executeCommand(newId, ...args);
+		});
 	}
 
 	getCommand(id: string): ICommand {

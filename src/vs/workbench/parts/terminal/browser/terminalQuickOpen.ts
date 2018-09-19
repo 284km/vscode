@@ -2,24 +2,23 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import nls = require('vs/nls');
+import * as nls from 'vs/nls';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { Mode, IEntryRunContext, IAutoFocus, IQuickNavigateConfiguration, IModel } from 'vs/base/parts/quickopen/common/quickOpen';
 import { QuickOpenModel, QuickOpenEntry } from 'vs/base/parts/quickopen/browser/quickOpenModel';
 import { QuickOpenHandler } from 'vs/workbench/browser/quickopen';
-import { ITerminalService } from 'vs/workbench/parts/terminal/common/terminal';
-import { IPanelService } from 'vs/workbench/services/panel/common/panelService';
+import { ITerminalService, ITerminalInstance } from 'vs/workbench/parts/terminal/common/terminal';
 import { ContributableActionProvider } from 'vs/workbench/browser/actions';
 import { stripWildcards } from 'vs/base/common/strings';
 import { matchesFuzzy } from 'vs/base/common/filters';
 import { ICommandService } from 'vs/platform/commands/common/commands';
-import { PICK_WORKSPACE_FOLDER_COMMAND } from 'vs/workbench/browser/actions/workspaceActions';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 export class TerminalEntry extends QuickOpenEntry {
 
 	constructor(
+		public instance: ITerminalInstance,
 		private label: string,
 		private terminalService: ITerminalService
 	) {
@@ -37,7 +36,7 @@ export class TerminalEntry extends QuickOpenEntry {
 	public run(mode: Mode, context: IEntryRunContext): boolean {
 		if (mode === Mode.OPEN) {
 			setTimeout(() => {
-				this.terminalService.setActiveInstanceByIndex(parseInt(this.label.split(':')[0], 10) - 1);
+				this.terminalService.setActiveInstance(this.instance);
 				this.terminalService.showPanel(true);
 			}, 0);
 			return true;
@@ -51,7 +50,6 @@ export class CreateTerminal extends QuickOpenEntry {
 
 	constructor(
 		private label: string,
-		private terminalService: ITerminalService,
 		private commandService: ICommandService
 	) {
 		super();
@@ -67,16 +65,7 @@ export class CreateTerminal extends QuickOpenEntry {
 
 	public run(mode: Mode, context: IEntryRunContext): boolean {
 		if (mode === Mode.OPEN) {
-			setTimeout(() => {
-				return this.commandService.executeCommand(PICK_WORKSPACE_FOLDER_COMMAND).then(workspace => {
-					const instance = this.terminalService.createInstance({ cwd: workspace.uri.fsPath }, true);
-					if (!instance) {
-						return TPromise.as(void 0);
-					}
-					this.terminalService.setActiveInstance(instance);
-					return this.terminalService.showPanel(true);
-				});
-			}, 0);
+			setTimeout(() => this.commandService.executeCommand('workbench.action.terminal.new'), 0);
 			return true;
 		}
 
@@ -91,17 +80,16 @@ export class TerminalPickerHandler extends QuickOpenHandler {
 	constructor(
 		@ITerminalService private terminalService: ITerminalService,
 		@ICommandService private commandService: ICommandService,
-		@IPanelService private panelService: IPanelService
 	) {
 		super();
 	}
 
-	public getResults(searchValue: string): TPromise<QuickOpenModel> {
+	public getResults(searchValue: string, token: CancellationToken): TPromise<QuickOpenModel> {
 		searchValue = searchValue.trim();
 		const normalizedSearchValueLowercase = stripWildcards(searchValue).toLowerCase();
 
 		const terminalEntries: QuickOpenEntry[] = this.getTerminals();
-		terminalEntries.push(new CreateTerminal(nls.localize("'workbench.action.terminal.newplus", "$(plus) Create New Integrated Terminal"), this.terminalService, this.commandService));
+		terminalEntries.push(new CreateTerminal(nls.localize("workbench.action.terminal.newplus", "$(plus) Create New Integrated Terminal"), this.commandService));
 
 		const entries = terminalEntries.filter(e => {
 			if (!searchValue) {
@@ -122,11 +110,13 @@ export class TerminalPickerHandler extends QuickOpenHandler {
 	}
 
 	private getTerminals(): TerminalEntry[] {
-		const terminals = this.terminalService.getInstanceLabels();
-		const terminalEntries = terminals.map(terminal => {
-			return new TerminalEntry(terminal, this.terminalService);
-		});
-		return terminalEntries;
+		return this.terminalService.terminalTabs.reduce((terminals, tab, tabIndex) => {
+			const terminalsInTab = tab.terminalInstances.map((terminal, terminalIndex) => {
+				const label = `${tabIndex + 1}.${terminalIndex + 1}: ${terminal.title}`;
+				return new TerminalEntry(terminal, label, this.terminalService);
+			});
+			return [...terminals, ...terminalsInTab];
+		}, []);
 	}
 
 	public getAutoFocus(searchValue: string, context: { model: IModel<QuickOpenEntry>, quickNavigateConfiguration?: IQuickNavigateConfiguration }): IAutoFocus {

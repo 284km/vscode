@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import { TPromise } from 'vs/base/common/winjs.base';
 import { MainContext, MainThreadStorageShape, IMainContext } from './extHost.protocol';
 
 export class ExtHostStorage {
@@ -12,14 +11,14 @@ export class ExtHostStorage {
 	private _proxy: MainThreadStorageShape;
 
 	constructor(mainContext: IMainContext) {
-		this._proxy = mainContext.get(MainContext.MainThreadStorage);
+		this._proxy = mainContext.getProxy(MainContext.MainThreadStorage);
 	}
 
-	getValue<T>(shared: boolean, key: string, defaultValue?: T): TPromise<T> {
+	getValue<T>(shared: boolean, key: string, defaultValue?: T): Thenable<T> {
 		return this._proxy.$getValue<T>(shared, key).then(value => value || defaultValue);
 	}
 
-	setValue(shared: boolean, key: string, value: any): TPromise<void> {
+	setValue(shared: boolean, key: string, value: any): Thenable<void> {
 		return this._proxy.$setValue(shared, key, value);
 	}
 }

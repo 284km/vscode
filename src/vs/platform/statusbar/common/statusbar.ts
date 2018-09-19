@@ -11,7 +11,7 @@ import { ThemeColor } from 'vs/platform/theme/common/themeService';
 
 export const IStatusbarService = createDecorator<IStatusbarService>('statusbarService');
 
-export enum StatusbarAlignment {
+export const enum StatusbarAlignment {
 	LEFT, RIGHT
 }
 
@@ -51,6 +51,11 @@ export interface IStatusbarEntry {
 	 * An optional extension ID if this entry is provided from an extension.
 	 */
 	extensionId?: string;
+
+	/**
+	 * Wether to show a beak above the status bar entry.
+	 */
+	showBeak?: boolean;
 }
 
 export interface IStatusbarService {

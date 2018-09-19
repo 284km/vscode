@@ -6,18 +6,36 @@
 'use strict';
 
 import { onUnexpectedError } from 'vs/base/common/errors';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { ExtensionHostMain, exit } from 'vs/workbench/node/extensionHostMain';
-import { RPCProtocol } from 'vs/workbench/services/extensions/node/rpcProtocol';
-import { parse } from 'vs/base/common/marshalling';
 import { IInitData } from 'vs/workbench/api/node/extHost.protocol';
-import { IMessagePassingProtocol } from 'vs/base/parts/ipc/common/ipc';
+import { IMessagePassingProtocol } from 'vs/base/parts/ipc/node/ipc';
 import { Protocol } from 'vs/base/parts/ipc/node/ipc.net';
 import { createConnection } from 'net';
-import Event, { filterEvent } from 'vs/base/common/event';
+import { Event, filterEvent } from 'vs/base/common/event';
+import { createMessageOfType, MessageType, isMessageOfType } from 'vs/workbench/common/extensionHostProtocol';
+import * as nativeWatchdog from 'native-watchdog';
+import product from 'vs/platform/node/product';
+
+// With Electron 2.x and node.js 8.x the "natives" module
+// can cause a native crash (see https://github.com/nodejs/node/issues/19891 and
+// https://github.com/electron/electron/issues/10905). To prevent this from
+// happening we essentially blocklist this module from getting loaded in any
+// extension by patching the node require() function.
+(function () {
+	const Module = require.__$__nodeRequire('module') as any;
+	const originalLoad = Module._load;
+
+	Module._load = function (request) {
+		if (request === 'natives') {
+			throw new Error('Either the extension or a NPM dependency is using the "natives" node module which is unsupported as it can cause a crash of the extension host. Click [here](https://go.microsoft.com/fwlink/?linkid=871887) to find out more');
+		}
+
+		return originalLoad.apply(this, arguments);
+	};
+})();
 
 interface IRendererConnection {
-	rpcProtocol: RPCProtocol;
+	protocol: IMessagePassingProtocol;
 	initData: IInitData;
 }
 
@@ -27,11 +45,11 @@ let onTerminate = function () {
 	exit();
 };
 
-function createExtHostProtocol(): TPromise<IMessagePassingProtocol> {
+function createExtHostProtocol(): Promise<IMessagePassingProtocol> {
 
 	const pipeName = process.env.VSCODE_IPC_HOOK_EXTHOST;
 
-	return new TPromise<IMessagePassingProtocol>((resolve, reject) => {
+	return new Promise<IMessagePassingProtocol>((resolve, reject) => {
 
 		const socket = createConnection(pipeName, () => {
 			socket.removeListener('error', reject);
@@ -46,7 +64,7 @@ function createExtHostProtocol(): TPromise<IMessagePassingProtocol> {
 			private _terminating = false;
 
 			readonly onMessage: Event<any> = filterEvent(protocol.onMessage, msg => {
-				if (msg.type !== '__$terminate') {
+				if (!isMessageOfType(msg, MessageType.Terminate)) {
 					return true;
 				}
 				this._terminating = true;
@@ -63,21 +81,30 @@ function createExtHostProtocol(): TPromise<IMessagePassingProtocol> {
 	});
 }
 
-function connectToRenderer(protocol: IMessagePassingProtocol): TPromise<IRendererConnection> {
-	return new TPromise<IRendererConnection>((c, e) => {
+function connectToRenderer(protocol: IMessagePassingProtocol): Promise<IRendererConnection> {
+	return new Promise<IRendererConnection>((c, e) => {
 
 		// Listen init data message
 		const first = protocol.onMessage(raw => {
 			first.dispose();
 
-			const initData = parse(raw);
-			const rpcProtocol = new RPCProtocol(protocol);
+			const initData = <IInitData>JSON.parse(raw.toString());
+
+			const rendererCommit = initData.commit;
+			const myCommit = product.commit;
+
+			if (rendererCommit && myCommit) {
+				// Running in the built version where commits are defined
+				if (rendererCommit !== myCommit) {
+					exit(55);
+				}
+			}
 
 			// Print a console message when rejection isn't handled within N seconds. For details:
 			// see https://nodejs.org/api/process.html#process_event_unhandledrejection
 			// and https://nodejs.org/api/process.html#process_event_rejectionhandled
-			const unhandledPromises: TPromise<any>[] = [];
-			process.on('unhandledRejection', (reason: any, promise: TPromise<any>) => {
+			const unhandledPromises: Promise<any>[] = [];
+			process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 				unhandledPromises.push(promise);
 				setTimeout(() => {
 					const idx = unhandledPromises.indexOf(promise);
@@ -88,7 +115,8 @@ function connectToRenderer(protocol: IMessagePassingProtocol): TPromise<IRendere
 					}
 				}, 1000);
 			});
-			process.on('rejectionHandled', (promise: TPromise<any>) => {
+
+			process.on('rejectionHandled', (promise: Promise<any>) => {
 				const idx = unhandledPromises.indexOf(promise);
 				if (idx >= 0) {
 					unhandledPromises.splice(idx, 1);
@@ -107,25 +135,52 @@ function connectToRenderer(protocol: IMessagePassingProtocol): TPromise<IRendere
 				} catch (e) {
 					onTerminate();
 				}
-			}, 5000);
+			}, 1000);
+
+			// In certain cases, the event loop can become busy and never yield
+			// e.g. while-true or process.nextTick endless loops
+			// So also use the native node module to do it from a separate thread
+			let watchdog: typeof nativeWatchdog;
+			try {
+				watchdog = require.__$__nodeRequire('native-watchdog');
+				watchdog.start(initData.parentPid);
+			} catch (err) {
+				// no problem...
+				onUnexpectedError(err);
+			}
 
 			// Tell the outside that we are initialized
-			protocol.send('initialized');
+			protocol.send(createMessageOfType(MessageType.Initialized));
 
-			c({ rpcProtocol, initData });
+			c({ protocol, initData });
 		});
 
 		// Tell the outside that we are ready to receive messages
-		protocol.send('ready');
+		protocol.send(createMessageOfType(MessageType.Ready));
 	});
 }
+
+patchExecArgv();
 
 createExtHostProtocol().then(protocol => {
 	// connect to main side
 	return connectToRenderer(protocol);
 }).then(renderer => {
 	// setup things
-	const extensionHostMain = new ExtensionHostMain(renderer.rpcProtocol, renderer.initData);
+	const extensionHostMain = new ExtensionHostMain(renderer.protocol, renderer.initData);
 	onTerminate = () => extensionHostMain.terminate();
 	return extensionHostMain.start();
-}).done(null, err => console.error(err));
+}).catch(err => console.error(err));
+
+function patchExecArgv() {
+	// when encountering the prevent-inspect flag we delete this
+	// and the prior flag
+	if (process.env.VSCODE_PREVENT_FOREIGN_INSPECT) {
+		for (let i = 0; i < process.execArgv.length; i++) {
+			if (process.execArgv[i].match(/--inspect-brk=\d+|--inspect=\d+/)) {
+				process.execArgv.splice(i, 1);
+				break;
+			}
+		}
+	}
+}

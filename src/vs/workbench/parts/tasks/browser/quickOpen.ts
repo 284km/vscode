@@ -18,6 +18,7 @@ import { IQuickOpenService } from 'vs/platform/quickOpen/common/quickOpen';
 import { Task, CustomTask, ContributedTask } from 'vs/workbench/parts/tasks/common/tasks';
 import { ITaskService, RunOptions } from 'vs/workbench/parts/tasks/common/taskService';
 import { ActionBarContributor, ContributableActionProvider } from 'vs/workbench/browser/actions';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 export class TaskEntry extends Model.QuickOpenEntry {
 
@@ -68,7 +69,6 @@ export abstract class QuickOpenHandler extends Quickopen.QuickOpenHandler {
 
 	private tasks: TPromise<(CustomTask | ContributedTask)[]>;
 
-
 	constructor(
 		protected quickOpenService: IQuickOpenService,
 		protected taskService: ITaskService
@@ -87,10 +87,10 @@ export abstract class QuickOpenHandler extends Quickopen.QuickOpenHandler {
 		this.tasks = undefined;
 	}
 
-	public getResults(input: string): TPromise<Model.QuickOpenModel> {
+	public getResults(input: string, token: CancellationToken): TPromise<Model.QuickOpenModel> {
 		return this.tasks.then((tasks) => {
 			let entries: Model.QuickOpenEntry[] = [];
-			if (tasks.length === 0) {
+			if (tasks.length === 0 || token.isCancellationRequested) {
 				return new Model.QuickOpenModel(entries);
 			}
 			let recentlyUsedTasks = this.taskService.getRecentlyUsedTasks();
@@ -161,8 +161,8 @@ export abstract class QuickOpenHandler extends Quickopen.QuickOpenHandler {
 
 class CustomizeTaskAction extends Action {
 
-	private static ID = 'workbench.action.tasks.customizeTask';
-	private static LABEL = nls.localize('customizeTask', "Configure Task");
+	private static readonly ID = 'workbench.action.tasks.customizeTask';
+	private static readonly LABEL = nls.localize('customizeTask', "Configure Task");
 
 	constructor(private taskService: ITaskService, private quickOpenService: IQuickOpenService) {
 		super(CustomizeTaskAction.ID, CustomizeTaskAction.LABEL);
@@ -200,7 +200,7 @@ export class QuickOpenActionContributor extends ActionBarContributor {
 
 	private action: CustomizeTaskAction;
 
-	constructor( @ITaskService private taskService: ITaskService, @IQuickOpenService private quickOpenService: IQuickOpenService) {
+	constructor(@ITaskService taskService: ITaskService, @IQuickOpenService quickOpenService: IQuickOpenService) {
 		super();
 		this.action = new CustomizeTaskAction(taskService, quickOpenService);
 	}

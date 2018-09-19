@@ -5,10 +5,9 @@
 'use strict';
 
 import { TPromise, ValueCallback, ErrorCallback } from 'vs/base/common/winjs.base';
+import { onUnexpectedError } from 'vs/base/common/errors';
 
-export class LazyPromise {
-
-	private _onCancel: () => void;
+export class LazyPromise implements Thenable<any> {
 
 	private _actual: TPromise<any>;
 	private _actualOk: ValueCallback;
@@ -20,10 +19,7 @@ export class LazyPromise {
 	private _hasErr: boolean;
 	private _err: any;
 
-	private _isCanceled: boolean;
-
-	constructor(onCancel: () => void) {
-		this._onCancel = onCancel;
+	constructor() {
 		this._actual = null;
 		this._actualOk = null;
 		this._actualErr = null;
@@ -31,7 +27,6 @@ export class LazyPromise {
 		this._value = null;
 		this._hasErr = false;
 		this._err = null;
-		this._isCanceled = false;
 	}
 
 	private _ensureActual(): TPromise<any> {
@@ -39,7 +34,7 @@ export class LazyPromise {
 			this._actual = new TPromise<any>((c, e) => {
 				this._actualOk = c;
 				this._actualErr = e;
-			}, this._onCancel);
+			});
 
 			if (this._hasValue) {
 				this._actualOk(this._value);
@@ -53,7 +48,7 @@ export class LazyPromise {
 	}
 
 	public resolveOk(value: any): void {
-		if (this._isCanceled || this._hasErr) {
+		if (this._hasValue || this._hasErr) {
 			return;
 		}
 
@@ -66,7 +61,7 @@ export class LazyPromise {
 	}
 
 	public resolveErr(err: any): void {
-		if (this._isCanceled || this._hasValue) {
+		if (this._hasValue || this._hasErr) {
 			return;
 		}
 
@@ -75,36 +70,14 @@ export class LazyPromise {
 
 		if (this._actual) {
 			this._actualErr(err);
+		} else {
+			// If nobody's listening at this point, it is safe to assume they never will,
+			// since resolving this promise is always "async"
+			onUnexpectedError(err);
 		}
 	}
 
 	public then(success: any, error: any): any {
-		if (this._isCanceled) {
-			return;
-		}
-
 		return this._ensureActual().then(success, error);
-	}
-
-	public done(success: any, error: any): void {
-		if (this._isCanceled) {
-			return;
-		}
-
-		this._ensureActual().done(success, error);
-	}
-
-	public cancel(): void {
-		if (this._hasValue || this._hasErr) {
-			return;
-		}
-
-		this._isCanceled = true;
-
-		if (this._actual) {
-			this._actual.cancel();
-		} else {
-			this._onCancel();
-		}
 	}
 }

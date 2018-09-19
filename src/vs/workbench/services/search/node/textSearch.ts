@@ -6,18 +6,16 @@
 'use strict';
 
 import * as path from 'path';
-
 import { onUnexpectedError } from 'vs/base/common/errors';
 import { IProgress } from 'vs/platform/search/common/search';
 import { FileWalker } from 'vs/workbench/services/search/node/fileSearch';
-
-import { ISerializedFileMatch, ISerializedSearchComplete, IRawSearch, ISearchEngine } from './search';
-import { ISearchWorker } from './worker/searchWorkerIpc';
+import { IRawSearch, ISearchEngine, ISearchEngineSuccess, ISerializedFileMatch } from './search';
 import { ITextSearchWorkerProvider } from './textSearchWorkerProvider';
+import { ISearchWorker, ISearchWorkerSearchArgs } from './worker/searchWorkerIpc';
 
 export class Engine implements ISearchEngine<ISerializedFileMatch[]> {
 
-	private static PROGRESS_FLUSH_CHUNK_SIZE = 50; // optimization: number of files to process before emitting progress event
+	private static readonly PROGRESS_FLUSH_CHUNK_SIZE = 50; // optimization: number of files to process before emitting progress event
 
 	private config: IRawSearch;
 	private walker: FileWalker;
@@ -60,7 +58,7 @@ export class Engine implements ISearchEngine<ISerializedFileMatch[]> {
 		});
 	}
 
-	search(onResult: (match: ISerializedFileMatch[]) => void, onProgress: (progress: IProgress) => void, done: (error: Error, complete: ISerializedSearchComplete) => void): void {
+	search(onResult: (match: ISerializedFileMatch[]) => void, onProgress: (progress: IProgress) => void, done: (error: Error, complete: ISearchEngineSuccess) => void): void {
 		this.workers = this.workerProvider.getWorkers();
 		this.initializeWorkers();
 
@@ -97,7 +95,7 @@ export class Engine implements ISearchEngine<ISerializedFileMatch[]> {
 			this.nextWorker = (this.nextWorker + 1) % this.workers.length;
 
 			const maxResults = this.config.maxResults && (this.config.maxResults - this.numResults);
-			const searchArgs = { absolutePaths: batch, maxResults, pattern: this.config.contentPattern, fileEncoding };
+			const searchArgs: ISearchWorkerSearchArgs = { absolutePaths: batch, maxResults, pattern: this.config.contentPattern, fileEncoding, previewOptions: this.config.previewOptions };
 			worker.search(searchArgs).then(result => {
 				if (!result || this.limitReached || this.isCanceled) {
 					return unwind(batchBytes);
@@ -147,20 +145,22 @@ export class Engine implements ISearchEngine<ISerializedFileMatch[]> {
 				nextBatch = [];
 				nextBatchBytes = 0;
 			}
-		}, (error, isLimitHit) => {
-			this.walkerIsDone = true;
-			this.walkerError = error;
+		},
+			onProgress,
+			(error, isLimitHit) => {
+				this.walkerIsDone = true;
+				this.walkerError = error;
 
-			// Send any remaining paths to a worker, or unwind if we're stopping
-			if (nextBatch.length) {
-				if (this.limitReached || this.isCanceled) {
-					unwind(nextBatchBytes);
+				// Send any remaining paths to a worker, or unwind if we're stopping
+				if (nextBatch.length) {
+					if (this.limitReached || this.isCanceled) {
+						unwind(nextBatchBytes);
+					} else {
+						run(nextBatch, nextBatchBytes);
+					}
 				} else {
-					run(nextBatch, nextBatchBytes);
+					unwind(0);
 				}
-			} else {
-				unwind(0);
-			}
-		});
+			});
 	}
 }

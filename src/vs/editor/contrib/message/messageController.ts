@@ -6,27 +6,28 @@
 'use strict';
 
 import 'vs/css!./messageController';
-import { setDisposableTimeout } from 'vs/base/common/async';
+import * as nls from 'vs/nls';
+import { TimeoutTimer } from 'vs/base/common/async';
 import { KeyCode } from 'vs/base/common/keyCodes';
-import { IDisposable, dispose } from 'vs/base/common/lifecycle';
+import { IDisposable, dispose, Disposable } from 'vs/base/common/lifecycle';
 import { alert } from 'vs/base/browser/ui/aria/aria';
 import { Range } from 'vs/editor/common/core/range';
 import * as editorCommon from 'vs/editor/common/editorCommon';
-import { commonEditorContribution, CommonEditorRegistry, EditorCommand } from 'vs/editor/common/editorCommonExtensions';
+import { registerEditorContribution, EditorCommand, registerEditorCommand } from 'vs/editor/browser/editorExtensions';
 import { ICodeEditor, IContentWidget, IContentWidgetPosition, ContentWidgetPositionPreference } from 'vs/editor/browser/editorBrowser';
 import { IContextKeyService, RawContextKey, IContextKey } from 'vs/platform/contextkey/common/contextkey';
 import { IPosition } from 'vs/editor/common/core/position';
 import { registerThemingParticipant, HIGH_CONTRAST } from 'vs/platform/theme/common/themeService';
-import { inputValidationInfoBorder, inputValidationInfoBackground } from 'vs/platform/theme/common/colorRegistry';
+import { inputValidationInfoBorder, inputValidationInfoBackground, inputValidationInfoForeground } from 'vs/platform/theme/common/colorRegistry';
+import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
 
-@commonEditorContribution
-export class MessageController {
+export class MessageController extends Disposable implements editorCommon.IEditorContribution {
 
-	private static _id = 'editor.contrib.messageController';
+	private static readonly _id = 'editor.contrib.messageController';
 
-	static CONTEXT_SNIPPET_MODE = new RawContextKey<boolean>('messageVisible', false);
+	static MESSAGE_VISIBLE = new RawContextKey<boolean>('messageVisible', false);
 
-	static get(editor: editorCommon.ICommonCodeEditor): MessageController {
+	static get(editor: ICodeEditor): MessageController {
 		return editor.getContribution<MessageController>(MessageController._id);
 	}
 
@@ -43,11 +44,14 @@ export class MessageController {
 		editor: ICodeEditor,
 		@IContextKeyService contextKeyService: IContextKeyService
 	) {
+		super();
 		this._editor = editor;
-		this._visible = MessageController.CONTEXT_SNIPPET_MODE.bindTo(contextKeyService);
+		this._visible = MessageController.MESSAGE_VISIBLE.bindTo(contextKeyService);
+		this._register(this._editor.onDidAttemptReadOnlyEdit(() => this._onDidAttemptReadOnlyEdit()));
 	}
 
 	dispose(): void {
+		super.dispose();
 		this._visible.reset();
 	}
 
@@ -71,7 +75,7 @@ export class MessageController {
 		this._messageListeners.push(this._editor.onDidChangeModel(() => this.closeMessage()));
 
 		// close after 3s
-		this._messageListeners.push(setDisposableTimeout(() => this.closeMessage(), 3000));
+		this._messageListeners.push(new TimeoutTimer(() => this.closeMessage(), 3000));
 
 		// close on mouse move
 		let bounds: Range;
@@ -96,17 +100,21 @@ export class MessageController {
 		this._messageListeners = dispose(this._messageListeners);
 		this._messageListeners.push(MessageWidget.fadeOut(this._messageWidget));
 	}
+
+	private _onDidAttemptReadOnlyEdit(): void {
+		this.showMessage(nls.localize('editor.readonly', "Cannot edit in read-only editor"), this._editor.getPosition());
+	}
 }
 
 const MessageCommand = EditorCommand.bindToContribution<MessageController>(MessageController.get);
 
 
-CommonEditorRegistry.registerEditorCommand(new MessageCommand({
+registerEditorCommand(new MessageCommand({
 	id: 'leaveEditorMessage',
-	precondition: MessageController.CONTEXT_SNIPPET_MODE,
+	precondition: MessageController.MESSAGE_VISIBLE,
 	handler: c => c.closeMessage(),
 	kbOpts: {
-		weight: CommonEditorRegistry.commandWeight(30),
+		weight: KeybindingWeight.EditorContrib + 30,
 		primary: KeyCode.Escape
 	}
 }));
@@ -138,10 +146,9 @@ class MessageWidget implements IContentWidget {
 
 		this._editor = editor;
 		this._editor.revealLinesInCenterIfOutsideViewport(lineNumber, lineNumber, editorCommon.ScrollType.Smooth);
-		this._position = { lineNumber, column: 1 };
+		this._position = { lineNumber, column: column - 1 };
 
 		this._domNode = document.createElement('div');
-		this._domNode.style.paddingLeft = `${editor.getOffsetForColumn(lineNumber, column) - 6}px`;
 		this._domNode.classList.add('monaco-editor-overlaymessage');
 
 		const message = document.createElement('div');
@@ -174,6 +181,8 @@ class MessageWidget implements IContentWidget {
 	}
 }
 
+registerEditorContribution(MessageController);
+
 registerThemingParticipant((theme, collector) => {
 	let border = theme.getColor(inputValidationInfoBorder);
 	if (border) {
@@ -184,5 +193,9 @@ registerThemingParticipant((theme, collector) => {
 	let background = theme.getColor(inputValidationInfoBackground);
 	if (background) {
 		collector.addRule(`.monaco-editor .monaco-editor-overlaymessage .message { background-color: ${background}; }`);
+	}
+	let foreground = theme.getColor(inputValidationInfoForeground);
+	if (foreground) {
+		collector.addRule(`.monaco-editor .monaco-editor-overlaymessage .message { color: ${foreground}; }`);
 	}
 });

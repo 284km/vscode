@@ -8,16 +8,16 @@ import { createDecorator } from 'vs/platform/instantiation/common/instantiation'
 
 export const ITitleService = createDecorator<ITitleService>('titleService');
 
+export interface ITitleProperties {
+	isPure?: boolean;
+	isAdmin?: boolean;
+}
+
 export interface ITitleService {
 	_serviceBrand: any;
 
 	/**
-	 * Set the window title with the given value.
+	 * Update some environmental title properties.
 	 */
-	setTitle(title: string): void;
-
-	/**
-	 * Set the represented file name to the title if any.
-	 */
-	setRepresentedFilename(path: string): void;
+	updateProperties(properties: ITitleProperties): void;
 }
