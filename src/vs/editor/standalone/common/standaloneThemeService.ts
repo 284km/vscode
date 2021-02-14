@@ -2,11 +2,11 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
+import { Color } from 'vs/base/common/color';
+import { ITokenThemeRule, TokenTheme } from 'vs/editor/common/modes/supports/tokenization';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { TokenTheme, ITokenThemeRule } from 'vs/editor/common/modes/supports/tokenization';
-import { ITheme, IThemeService } from 'vs/platform/theme/common/themeService';
+import { IColorTheme, IThemeService } from 'vs/platform/theme/common/themeService';
 
 export const IStandaloneThemeService = createDecorator<IStandaloneThemeService>('themeService');
 
@@ -17,20 +17,24 @@ export interface IStandaloneThemeData {
 	base: BuiltinTheme;
 	inherit: boolean;
 	rules: ITokenThemeRule[];
+	encodedTokensColors?: string[];
 	colors: IColors;
 }
 
-export interface IStandaloneTheme extends ITheme {
+export interface IStandaloneTheme extends IColorTheme {
 	tokenTheme: TokenTheme;
 	themeName: string;
 }
 
 export interface IStandaloneThemeService extends IThemeService {
-	_serviceBrand: any;
+	readonly _serviceBrand: undefined;
 
 	setTheme(themeName: string): string;
 
 	defineTheme(themeName: string, themeData: IStandaloneThemeData): void;
 
-	getTheme(): IStandaloneTheme;
+	getColorTheme(): IStandaloneTheme;
+
+	setColorMapOverride(colorMapOverride: Color[] | null): void;
+
 }

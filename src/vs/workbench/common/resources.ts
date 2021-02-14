@@ -3,100 +3,154 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import URI from 'vs/base/common/uri';
-import objects = require('vs/base/common/objects');
-import paths = require('vs/base/common/paths');
-import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
-import { IDisposable, dispose } from 'vs/base/common/lifecycle';
-import Event, { Emitter } from 'vs/base/common/event';
-import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
-import { ParsedExpression, IExpression } from 'vs/base/common/glob';
-import { basename } from 'vs/base/common/paths';
+import { URI } from 'vs/base/common/uri';
+import * as objects from 'vs/base/common/objects';
+import { Emitter } from 'vs/base/common/event';
+import { basename, dirname, extname, relativePath } from 'vs/base/common/resources';
 import { RawContextKey, IContextKeyService, IContextKey } from 'vs/platform/contextkey/common/contextkey';
 import { IModeService } from 'vs/editor/common/services/modeService';
+import { IFileService } from 'vs/platform/files/common/files';
+import { Disposable } from 'vs/base/common/lifecycle';
+import { ParsedExpression, IExpression, parse } from 'vs/base/common/glob';
+import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
+import { IConfigurationService, IConfigurationChangeEvent } from 'vs/platform/configuration/common/configuration';
+import { withNullAsUndefined } from 'vs/base/common/types';
 
-export class ResourceContextKey implements IContextKey<URI> {
+export class ResourceContextKey extends Disposable implements IContextKey<URI> {
 
-	static Scheme = new RawContextKey<string>('resourceScheme', undefined);
-	static Filename = new RawContextKey<string>('resourceFilename', undefined);
-	static LangId = new RawContextKey<string>('resourceLangId', undefined);
-	static Resource = new RawContextKey<URI>('resource', undefined);
-	static Extension = new RawContextKey<string>('resourceExtname', undefined);
+	// NOTE: DO NOT CHANGE THE DEFAULT VALUE TO ANYTHING BUT
+	// UNDEFINED! IT IS IMPORTANT THAT DEFAULTS ARE INHERITED
+	// FROM THE PARENT CONTEXT AND ONLY UNDEFINED DOES THIS
 
-	private _resourceKey: IContextKey<URI>;
-	private _schemeKey: IContextKey<string>;
-	private _filenameKey: IContextKey<string>;
-	private _langIdKey: IContextKey<string>;
-	private _extensionKey: IContextKey<string>;
+	static readonly Scheme = new RawContextKey<string>('resourceScheme', undefined);
+	static readonly Filename = new RawContextKey<string>('resourceFilename', undefined);
+	static readonly Dirname = new RawContextKey<string>('resourceDirname', undefined);
+	static readonly Path = new RawContextKey<string>('resourcePath', undefined);
+	static readonly LangId = new RawContextKey<string>('resourceLangId', undefined);
+	static readonly Resource = new RawContextKey<URI>('resource', undefined);
+	static readonly Extension = new RawContextKey<string>('resourceExtname', undefined);
+	static readonly HasResource = new RawContextKey<boolean>('resourceSet', undefined);
+	static readonly IsFileSystemResource = new RawContextKey<boolean>('isFileSystemResource', undefined);
+
+	private readonly _resourceKey: IContextKey<URI | null>;
+	private readonly _schemeKey: IContextKey<string | null>;
+	private readonly _filenameKey: IContextKey<string | null>;
+	private readonly _dirnameKey: IContextKey<string | null>;
+	private readonly _pathKey: IContextKey<string | null>;
+	private readonly _langIdKey: IContextKey<string | null>;
+	private readonly _extensionKey: IContextKey<string | null>;
+	private readonly _hasResource: IContextKey<boolean>;
+	private readonly _isFileSystemResource: IContextKey<boolean>;
 
 	constructor(
-		@IContextKeyService contextKeyService: IContextKeyService,
-		@IModeService private _modeService: IModeService
+		@IContextKeyService private readonly _contextKeyService: IContextKeyService,
+		@IFileService private readonly _fileService: IFileService,
+		@IModeService private readonly _modeService: IModeService
 	) {
-		this._schemeKey = ResourceContextKey.Scheme.bindTo(contextKeyService);
-		this._filenameKey = ResourceContextKey.Filename.bindTo(contextKeyService);
-		this._langIdKey = ResourceContextKey.LangId.bindTo(contextKeyService);
-		this._resourceKey = ResourceContextKey.Resource.bindTo(contextKeyService);
-		this._extensionKey = ResourceContextKey.Extension.bindTo(contextKeyService);
+		super();
+
+		this._schemeKey = ResourceContextKey.Scheme.bindTo(this._contextKeyService);
+		this._filenameKey = ResourceContextKey.Filename.bindTo(this._contextKeyService);
+		this._dirnameKey = ResourceContextKey.Dirname.bindTo(this._contextKeyService);
+		this._pathKey = ResourceContextKey.Path.bindTo(this._contextKeyService);
+		this._langIdKey = ResourceContextKey.LangId.bindTo(this._contextKeyService);
+		this._resourceKey = ResourceContextKey.Resource.bindTo(this._contextKeyService);
+		this._extensionKey = ResourceContextKey.Extension.bindTo(this._contextKeyService);
+		this._hasResource = ResourceContextKey.HasResource.bindTo(this._contextKeyService);
+		this._isFileSystemResource = ResourceContextKey.IsFileSystemResource.bindTo(this._contextKeyService);
+
+		this._register(_fileService.onDidChangeFileSystemProviderRegistrations(() => {
+			const resource = this._resourceKey.get();
+			this._isFileSystemResource.set(Boolean(resource && _fileService.canHandleResource(resource)));
+		}));
+
+		this._register(_modeService.onDidCreateMode(() => {
+			const value = this._resourceKey.get();
+			this._langIdKey.set(value ? this._modeService.getModeIdByFilepathOrFirstLine(value) : null);
+		}));
 	}
 
-	set(value: URI) {
-		this._resourceKey.set(value);
-		this._schemeKey.set(value && value.scheme);
-		this._filenameKey.set(value && basename(value.fsPath));
-		this._langIdKey.set(value && this._modeService.getModeIdByFilenameOrFirstLine(value.fsPath));
-		this._extensionKey.set(value && paths.extname(value.fsPath));
+	set(value: URI | null) {
+		if (!ResourceContextKey._uriEquals(this._resourceKey.get(), value)) {
+			this._contextKeyService.bufferChangeEvents(() => {
+				this._resourceKey.set(value);
+				this._schemeKey.set(value ? value.scheme : null);
+				this._filenameKey.set(value ? basename(value) : null);
+				this._dirnameKey.set(value ? dirname(value).fsPath : null);
+				this._pathKey.set(value ? value.fsPath : null);
+				this._langIdKey.set(value ? this._modeService.getModeIdByFilepathOrFirstLine(value) : null);
+				this._extensionKey.set(value ? extname(value) : null);
+				this._hasResource.set(!!value);
+				this._isFileSystemResource.set(value ? this._fileService.canHandleResource(value) : false);
+			});
+		}
 	}
 
 	reset(): void {
-		this._schemeKey.reset();
-		this._langIdKey.reset();
-		this._resourceKey.reset();
-		this._extensionKey.reset();
+		this._contextKeyService.bufferChangeEvents(() => {
+			this._resourceKey.reset();
+			this._schemeKey.reset();
+			this._filenameKey.reset();
+			this._dirnameKey.reset();
+			this._pathKey.reset();
+			this._langIdKey.reset();
+			this._extensionKey.reset();
+			this._hasResource.reset();
+			this._isFileSystemResource.reset();
+		});
 	}
 
-	public get(): URI {
-		return this._resourceKey.get();
+	get(): URI | undefined {
+		return withNullAsUndefined(this._resourceKey.get());
+	}
+
+	private static _uriEquals(a: URI | undefined | null, b: URI | undefined | null): boolean {
+		if (a === b) {
+			return true;
+		}
+		if (!a || !b) {
+			return false;
+		}
+		return a.scheme === b.scheme // checks for not equals (fail fast)
+			&& a.authority === b.authority
+			&& a.path === b.path
+			&& a.query === b.query
+			&& a.fragment === b.fragment
+			&& a.toString() === b.toString(); // for equal we use the normalized toString-form
 	}
 }
 
-export class ResourceGlobMatcher {
+export class ResourceGlobMatcher extends Disposable {
 
-	private static readonly NO_ROOT: string = null;
+	private static readonly NO_ROOT: string | null = null;
 
-	private _onExpressionChange: Emitter<void>;
-	private toUnbind: IDisposable[];
-	private mapRootToParsedExpression: Map<string, ParsedExpression>;
-	private mapRootToExpressionConfig: Map<string, IExpression>;
+	private readonly _onExpressionChange = this._register(new Emitter<void>());
+	readonly onExpressionChange = this._onExpressionChange.event;
+
+	private readonly mapRootToParsedExpression = new Map<string | null, ParsedExpression>();
+	private readonly mapRootToExpressionConfig = new Map<string | null, IExpression>();
 
 	constructor(
 		private globFn: (root?: URI) => IExpression,
-		private parseFn: (expression: IExpression) => ParsedExpression,
-		@IWorkspaceContextService private contextService: IWorkspaceContextService,
-		@IConfigurationService private configurationService: IConfigurationService
+		private shouldUpdate: (event: IConfigurationChangeEvent) => boolean,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IConfigurationService private readonly configurationService: IConfigurationService
 	) {
-		this.toUnbind = [];
-
-		this.mapRootToParsedExpression = new Map<string, ParsedExpression>();
-		this.mapRootToExpressionConfig = new Map<string, IExpression>();
-
-		this._onExpressionChange = new Emitter<void>();
-		this.toUnbind.push(this._onExpressionChange);
+		super();
 
 		this.updateExcludes(false);
 
 		this.registerListeners();
 	}
 
-	public get onExpressionChange(): Event<void> {
-		return this._onExpressionChange.event;
-	}
-
 	private registerListeners(): void {
-		this.toUnbind.push(this.configurationService.onDidChangeConfiguration(() => this.updateExcludes(true)));
-		this.toUnbind.push(this.contextService.onDidChangeWorkspaceFolders(() => this.updateExcludes(true)));
+		this._register(this.configurationService.onDidChangeConfiguration(e => {
+			if (this.shouldUpdate(e)) {
+				this.updateExcludes(true);
+			}
+		}));
+
+		this._register(this.contextService.onDidChangeWorkspaceFolders(() => this.updateExcludes(true)));
 	}
 
 	private updateExcludes(fromEvent: boolean): void {
@@ -108,8 +162,8 @@ export class ResourceGlobMatcher {
 			if (!this.mapRootToExpressionConfig.has(folder.uri.toString()) || !objects.equals(this.mapRootToExpressionConfig.get(folder.uri.toString()), rootExcludes)) {
 				changed = true;
 
-				this.mapRootToParsedExpression.set(folder.uri.toString(), this.parseFn(rootExcludes));
-				this.mapRootToExpressionConfig.set(folder.uri.toString(), objects.clone(rootExcludes));
+				this.mapRootToParsedExpression.set(folder.uri.toString(), parse(rootExcludes));
+				this.mapRootToExpressionConfig.set(folder.uri.toString(), objects.deepClone(rootExcludes));
 			}
 		});
 
@@ -119,7 +173,7 @@ export class ResourceGlobMatcher {
 				return; // always keep this one
 			}
 
-			if (!this.contextService.getWorkspaceFolder(URI.parse(root))) {
+			if (root && !this.contextService.getWorkspaceFolder(URI.parse(root))) {
 				this.mapRootToParsedExpression.delete(root);
 				this.mapRootToExpressionConfig.delete(root);
 
@@ -132,8 +186,8 @@ export class ResourceGlobMatcher {
 		if (!this.mapRootToExpressionConfig.has(ResourceGlobMatcher.NO_ROOT) || !objects.equals(this.mapRootToExpressionConfig.get(ResourceGlobMatcher.NO_ROOT), globalExcludes)) {
 			changed = true;
 
-			this.mapRootToParsedExpression.set(ResourceGlobMatcher.NO_ROOT, this.parseFn(globalExcludes));
-			this.mapRootToExpressionConfig.set(ResourceGlobMatcher.NO_ROOT, objects.clone(globalExcludes));
+			this.mapRootToParsedExpression.set(ResourceGlobMatcher.NO_ROOT, parse(globalExcludes));
+			this.mapRootToExpressionConfig.set(ResourceGlobMatcher.NO_ROOT, objects.deepClone(globalExcludes));
 		}
 
 		if (fromEvent && changed) {
@@ -141,10 +195,10 @@ export class ResourceGlobMatcher {
 		}
 	}
 
-	public matches(resource: URI): boolean {
+	matches(resource: URI): boolean {
 		const folder = this.contextService.getWorkspaceFolder(resource);
 
-		let expressionForRoot: ParsedExpression;
+		let expressionForRoot: ParsedExpression | undefined;
 		if (folder && this.mapRootToParsedExpression.has(folder.uri.toString())) {
 			expressionForRoot = this.mapRootToParsedExpression.get(folder.uri.toString());
 		} else {
@@ -155,17 +209,13 @@ export class ResourceGlobMatcher {
 		// path so that glob patterns have a higher probability to match. For example
 		// a glob pattern of "src/**" will not match on an absolute path "/folder/src/file.txt"
 		// but can match on "src/file.txt"
-		let resourcePathToMatch: string;
+		let resourcePathToMatch: string | undefined;
 		if (folder) {
-			resourcePathToMatch = paths.normalize(paths.relative(folder.uri.fsPath, resource.fsPath));
+			resourcePathToMatch = relativePath(folder.uri, resource); // always uses forward slashes
 		} else {
-			resourcePathToMatch = resource.fsPath;
+			resourcePathToMatch = resource.fsPath; // TODO@isidor: support non-file URIs
 		}
 
-		return !!expressionForRoot(resourcePathToMatch);
-	}
-
-	public dispose(): void {
-		this.toUnbind = dispose(this.toUnbind);
+		return !!expressionForRoot && typeof resourcePathToMatch === 'string' && !!expressionForRoot(resourcePathToMatch);
 	}
 }

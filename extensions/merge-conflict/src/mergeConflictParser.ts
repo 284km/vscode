@@ -58,7 +58,7 @@ export class MergeConflictParser {
 				currentConflict.commonAncestors.push(line);
 			}
 			// Are we within a conflict block and is this a splitter? =======
-			else if (currentConflict && !currentConflict.splitter && line.text.startsWith(splitterMarker)) {
+			else if (currentConflict && !currentConflict.splitter && line.text === splitterMarker) {
 				currentConflict.splitter = line;
 			}
 			// Are we within a conflict block and is this a footer? >>>>>>>
@@ -81,7 +81,7 @@ export class MergeConflictParser {
 
 		return conflictDescriptors
 			.filter(Boolean)
-			.map(descriptor => new DocumentMergeConflict(document, descriptor));
+			.map(descriptor => new DocumentMergeConflict(descriptor));
 	}
 
 	private static scanItemTolMergeConflictDescriptor(document: vscode.TextDocument, scanned: IScanMergedConflict): interfaces.IDocumentMergeConflictDescriptor | null {

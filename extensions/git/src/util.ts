@@ -3,11 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import { Event } from 'vscode';
-import { dirname } from 'path';
-import * as fs from 'fs';
+import { Event, Disposable, EventEmitter } from 'vscode';
+import { dirname, sep } from 'path';
+import { Readable } from 'stream';
+import { promises as fs, createReadStream } from 'fs';
 import * as byline from 'byline';
 
 export function log(...args: any[]): void {
@@ -33,16 +32,20 @@ export function combinedDisposable(disposables: IDisposable[]): IDisposable {
 
 export const EmptyDisposable = toDisposable(() => null);
 
+export function fireEvent<T>(event: Event<T>): Event<T> {
+	return (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => event(_ => (listener as any).call(thisArgs), null, disposables);
+}
+
 export function mapEvent<I, O>(event: Event<I>, map: (i: I) => O): Event<O> {
-	return (listener, thisArgs = null, disposables?) => event(i => listener.call(thisArgs, map(i)), null, disposables);
+	return (listener: (e: O) => any, thisArgs?: any, disposables?: Disposable[]) => event(i => listener.call(thisArgs, map(i)), null, disposables);
 }
 
 export function filterEvent<T>(event: Event<T>, filter: (e: T) => boolean): Event<T> {
-	return (listener, thisArgs = null, disposables?) => event(e => filter(e) && listener.call(thisArgs, e), null, disposables);
+	return (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => event(e => filter(e) && listener.call(thisArgs, e), null, disposables);
 }
 
 export function anyEvent<T>(...events: Event<T>[]): Event<T> {
-	return (listener, thisArgs = null, disposables?) => {
+	return (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => {
 		const result = combinedDisposable(events.map(event => event(i => listener.call(thisArgs, i))));
 
 		if (disposables) {
@@ -54,17 +57,27 @@ export function anyEvent<T>(...events: Event<T>[]): Event<T> {
 }
 
 export function done<T>(promise: Promise<T>): Promise<void> {
-	return promise.then<void>(() => void 0);
+	return promise.then<void>(() => undefined);
 }
 
 export function onceEvent<T>(event: Event<T>): Event<T> {
-	return (listener, thisArgs = null, disposables?) => {
+	return (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => {
 		const result = event(e => {
 			result.dispose();
 			return listener.call(thisArgs, e);
 		}, null, disposables);
 
 		return result;
+	};
+}
+
+export function debounceEvent<T>(event: Event<T>, delay: number): Event<T> {
+	return (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => {
+		let timer: NodeJS.Timer;
+		return event(e => {
+			clearTimeout(timer);
+			timer = setTimeout(() => listener.call(thisArgs, e), delay);
+		}, null, disposables);
 	};
 }
 
@@ -86,7 +99,7 @@ export function once(fn: (...args: any[]) => any): (...args: any[]) => any {
 
 export function assign<T>(destination: T, ...sources: any[]): T {
 	for (const source of sources) {
-		Object.keys(source).forEach(key => destination[key] = source[key]);
+		Object.keys(source).forEach(key => (destination as any)[key] = source[key]);
 	}
 
 	return destination;
@@ -115,23 +128,16 @@ export function groupBy<T>(arr: T[], fn: (el: T) => string): { [key: string]: T[
 	}, Object.create(null));
 }
 
-export function denodeify<R>(fn: Function): (...args) => Promise<R> {
-	return (...args) => new Promise<R>((c, e) => fn(...args, (err, r) => err ? e(err) : c(r)));
-}
-
-export function nfcall<R>(fn: Function, ...args): Promise<R> {
-	return new Promise<R>((c, e) => fn(...args, (err, r) => err ? e(err) : c(r)));
-}
 
 export async function mkdirp(path: string, mode?: number): Promise<boolean> {
 	const mkdir = async () => {
 		try {
-			await nfcall(fs.mkdir, path, mode);
+			await fs.mkdir(path, mode);
 		} catch (err) {
 			if (err.code === 'EEXIST') {
-				const stat = await nfcall<fs.Stats>(fs.stat, path);
+				const stat = await fs.stat(path);
 
-				if (stat.isDirectory) {
+				if (stat.isDirectory()) {
 					return;
 				}
 
@@ -193,7 +199,7 @@ export function find<T>(array: T[], fn: (t: T) => boolean): T | undefined {
 
 export async function grep(filename: string, pattern: RegExp): Promise<boolean> {
 	return new Promise<boolean>((c, e) => {
-		const fileStream = fs.createReadStream(filename, { encoding: 'utf8' });
+		const fileStream = createReadStream(filename, { encoding: 'utf8' });
 		const stream = byline(fileStream);
 		stream.on('data', (line: string) => {
 			if (pattern.test(line)) {
@@ -205,4 +211,206 @@ export async function grep(filename: string, pattern: RegExp): Promise<boolean> 
 		stream.on('error', e);
 		stream.on('end', () => c(false));
 	});
+}
+
+export function readBytes(stream: Readable, bytes: number): Promise<Buffer> {
+	return new Promise<Buffer>((complete, error) => {
+		let done = false;
+		let buffer = Buffer.allocUnsafe(bytes);
+		let bytesRead = 0;
+
+		stream.on('data', (data: Buffer) => {
+			let bytesToRead = Math.min(bytes - bytesRead, data.length);
+			data.copy(buffer, bytesRead, 0, bytesToRead);
+			bytesRead += bytesToRead;
+
+			if (bytesRead === bytes) {
+				(stream as any).destroy(); // Will trigger the close event eventually
+			}
+		});
+
+		stream.on('error', (e: Error) => {
+			if (!done) {
+				done = true;
+				error(e);
+			}
+		});
+
+		stream.on('close', () => {
+			if (!done) {
+				done = true;
+				complete(buffer.slice(0, bytesRead));
+			}
+		});
+	});
+}
+
+export const enum Encoding {
+	UTF8 = 'utf8',
+	UTF16be = 'utf16be',
+	UTF16le = 'utf16le'
+}
+
+export function detectUnicodeEncoding(buffer: Buffer): Encoding | null {
+	if (buffer.length < 2) {
+		return null;
+	}
+
+	const b0 = buffer.readUInt8(0);
+	const b1 = buffer.readUInt8(1);
+
+	if (b0 === 0xFE && b1 === 0xFF) {
+		return Encoding.UTF16be;
+	}
+
+	if (b0 === 0xFF && b1 === 0xFE) {
+		return Encoding.UTF16le;
+	}
+
+	if (buffer.length < 3) {
+		return null;
+	}
+
+	const b2 = buffer.readUInt8(2);
+
+	if (b0 === 0xEF && b1 === 0xBB && b2 === 0xBF) {
+		return Encoding.UTF8;
+	}
+
+	return null;
+}
+
+function isWindowsPath(path: string): boolean {
+	return /^[a-zA-Z]:\\/.test(path);
+}
+
+export function isDescendant(parent: string, descendant: string): boolean {
+	if (parent === descendant) {
+		return true;
+	}
+
+	if (parent.charAt(parent.length - 1) !== sep) {
+		parent += sep;
+	}
+
+	// Windows is case insensitive
+	if (isWindowsPath(parent)) {
+		parent = parent.toLowerCase();
+		descendant = descendant.toLowerCase();
+	}
+
+	return descendant.startsWith(parent);
+}
+
+export function pathEquals(a: string, b: string): boolean {
+	// Windows is case insensitive
+	if (isWindowsPath(a)) {
+		a = a.toLowerCase();
+		b = b.toLowerCase();
+	}
+
+	return a === b;
+}
+
+export function* splitInChunks(array: string[], maxChunkLength: number): IterableIterator<string[]> {
+	let current: string[] = [];
+	let length = 0;
+
+	for (const value of array) {
+		let newLength = length + value.length;
+
+		if (newLength > maxChunkLength && current.length > 0) {
+			yield current;
+			current = [];
+			newLength = value.length;
+		}
+
+		current.push(value);
+		length = newLength;
+	}
+
+	if (current.length > 0) {
+		yield current;
+	}
+}
+
+interface ILimitedTaskFactory<T> {
+	factory: () => Promise<T>;
+	c: (value: T | Promise<T>) => void;
+	e: (error?: any) => void;
+}
+
+export class Limiter<T> {
+
+	private runningPromises: number;
+	private maxDegreeOfParalellism: number;
+	private outstandingPromises: ILimitedTaskFactory<T>[];
+
+	constructor(maxDegreeOfParalellism: number) {
+		this.maxDegreeOfParalellism = maxDegreeOfParalellism;
+		this.outstandingPromises = [];
+		this.runningPromises = 0;
+	}
+
+	queue(factory: () => Promise<T>): Promise<T> {
+		return new Promise<T>((c, e) => {
+			this.outstandingPromises.push({ factory, c, e });
+			this.consume();
+		});
+	}
+
+	private consume(): void {
+		while (this.outstandingPromises.length && this.runningPromises < this.maxDegreeOfParalellism) {
+			const iLimitedTask = this.outstandingPromises.shift()!;
+			this.runningPromises++;
+
+			const promise = iLimitedTask.factory();
+			promise.then(iLimitedTask.c, iLimitedTask.e);
+			promise.then(() => this.consumed(), () => this.consumed());
+		}
+	}
+
+	private consumed(): void {
+		this.runningPromises--;
+
+		if (this.outstandingPromises.length > 0) {
+			this.consume();
+		}
+	}
+}
+
+type Completion<T> = { success: true, value: T } | { success: false, err: any };
+
+export class PromiseSource<T> {
+
+	private _onDidComplete = new EventEmitter<Completion<T>>();
+
+	private _promise: Promise<T> | undefined;
+	get promise(): Promise<T> {
+		if (this._promise) {
+			return this._promise;
+		}
+
+		return eventToPromise(this._onDidComplete.event).then(completion => {
+			if (completion.success) {
+				return completion.value;
+			} else {
+				throw completion.err;
+			}
+		});
+	}
+
+	resolve(value: T): void {
+		if (!this._promise) {
+			this._promise = Promise.resolve(value);
+			this._onDidComplete.fire({ success: true, value });
+		}
+	}
+
+	reject(err: any): void {
+		if (!this._promise) {
+			this._promise = Promise.reject(err);
+			this._onDidComplete.fire({ success: false, err });
+		}
+	}
 }

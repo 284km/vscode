@@ -2,77 +2,123 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { MainContext, MainThreadOutputServiceShape, IMainContext } from './extHost.protocol';
-import * as vscode from 'vscode';
+import { MainThreadOutputServiceShape } from '../common/extHost.protocol';
+import type * as vscode from 'vscode';
+import { URI } from 'vs/base/common/uri';
+import { join } from 'vs/base/common/path';
+import { toLocalISOString } from 'vs/base/common/date';
+import { SymlinkSupport } from 'vs/base/node/pfs';
+import { promises } from 'fs';
+import { AbstractExtHostOutputChannel, ExtHostPushOutputChannel, ExtHostOutputService, LazyOutputChannel } from 'vs/workbench/api/common/extHostOutput';
+import { IExtHostInitDataService } from 'vs/workbench/api/common/extHostInitDataService';
+import { IExtHostRpcService } from 'vs/workbench/api/common/extHostRpcService';
+import { MutableDisposable } from 'vs/base/common/lifecycle';
+import { ILogService } from 'vs/platform/log/common/log';
+import { createRotatingLogger } from 'vs/platform/log/node/spdlogLog';
+import { RotatingLogger } from 'spdlog';
+import { ByteSize } from 'vs/platform/files/common/files';
 
-export class ExtHostOutputChannel implements vscode.OutputChannel {
+class OutputAppender {
 
-	private static _idPool = 1;
+	private appender: RotatingLogger;
 
-	private _proxy: MainThreadOutputServiceShape;
-	private _name: string;
-	private _id: string;
-	private _disposed: boolean;
-
-	constructor(name: string, proxy: MainThreadOutputServiceShape) {
-		this._name = name;
-		this._id = 'extension-output-#' + (ExtHostOutputChannel._idPool++);
-		this._proxy = proxy;
+	constructor(name: string, readonly file: string) {
+		this.appender = createRotatingLogger(name, file, 30 * ByteSize.MB, 1);
+		this.appender.clearFormatters();
 	}
 
-	get name(): string {
-		return this._name;
+	append(content: string): void {
+		this.appender.critical(content);
 	}
 
-	dispose(): void {
-		if (!this._disposed) {
-			this._proxy.$dispose(this._id, this._name).then(() => {
-				this._disposed = true;
-			});
-		}
-	}
-
-	append(value: string): void {
-		this._proxy.$append(this._id, this._name, value);
-	}
-
-	appendLine(value: string): void {
-		this.append(value + '\n');
-	}
-
-	clear(): void {
-		this._proxy.$clear(this._id, this._name);
-	}
-
-	show(columnOrPreserveFocus?: vscode.ViewColumn | boolean, preserveFocus?: boolean): void {
-		if (typeof columnOrPreserveFocus === 'boolean') {
-			preserveFocus = columnOrPreserveFocus;
-		}
-
-		this._proxy.$reveal(this._id, this._name, preserveFocus);
-	}
-
-	hide(): void {
-		this._proxy.$close(this._id);
+	flush(): void {
+		this.appender.flush();
 	}
 }
 
-export class ExtHostOutputService {
 
-	private _proxy: MainThreadOutputServiceShape;
+export class ExtHostOutputChannelBackedByFile extends AbstractExtHostOutputChannel {
 
-	constructor(mainContext: IMainContext) {
-		this._proxy = mainContext.get(MainContext.MainThreadOutputService);
+	private _appender: OutputAppender;
+
+	constructor(name: string, appender: OutputAppender, proxy: MainThreadOutputServiceShape) {
+		super(name, false, URI.file(appender.file), proxy);
+		this._appender = appender;
+	}
+
+	append(value: string): void {
+		super.append(value);
+		this._appender.append(value);
+		this._onDidAppend.fire();
+	}
+
+	update(): void {
+		this._appender.flush();
+		super.update();
+	}
+
+	show(columnOrPreserveFocus?: vscode.ViewColumn | boolean, preserveFocus?: boolean): void {
+		this._appender.flush();
+		super.show(columnOrPreserveFocus, preserveFocus);
+	}
+
+	clear(): void {
+		this._appender.flush();
+		super.clear();
+	}
+}
+
+export class ExtHostOutputService2 extends ExtHostOutputService {
+
+	private _logsLocation: URI;
+	private _namePool: number = 1;
+	private readonly _channels: Map<string, AbstractExtHostOutputChannel> = new Map<string, AbstractExtHostOutputChannel>();
+	private readonly _visibleChannelDisposable = new MutableDisposable();
+
+	constructor(
+		@IExtHostRpcService extHostRpc: IExtHostRpcService,
+		@ILogService private readonly logService: ILogService,
+		@IExtHostInitDataService initData: IExtHostInitDataService,
+	) {
+		super(extHostRpc);
+		this._logsLocation = initData.logsLocation;
+	}
+
+	$setVisibleChannel(channelId: string): void {
+		if (channelId) {
+			const channel = this._channels.get(channelId);
+			if (channel) {
+				this._visibleChannelDisposable.value = channel.onDidAppend(() => channel.update());
+			}
+		}
 	}
 
 	createOutputChannel(name: string): vscode.OutputChannel {
 		name = name.trim();
 		if (!name) {
 			throw new Error('illegal argument `name`. must not be falsy');
-		} else {
-			return new ExtHostOutputChannel(name, this._proxy);
+		}
+		const extHostOutputChannel = this._doCreateOutChannel(name);
+		extHostOutputChannel.then(channel => channel._id.then(id => this._channels.set(id, channel)));
+		return new LazyOutputChannel(name, extHostOutputChannel);
+	}
+
+	private async _doCreateOutChannel(name: string): Promise<AbstractExtHostOutputChannel> {
+		try {
+			const outputDirPath = join(this._logsLocation.fsPath, `output_logging_${toLocalISOString(new Date()).replace(/-|:|\.\d+Z$/g, '')}`);
+			const exists = await SymlinkSupport.existsDirectory(outputDirPath);
+			if (!exists) {
+				await promises.mkdir(outputDirPath, { recursive: true });
+			}
+			const fileName = `${this._namePool++}-${name.replace(/[\\/:\*\?"<>\|]/g, '')}`;
+			const file = URI.file(join(outputDirPath, `${fileName}.log`));
+			const appender = new OutputAppender(fileName, file.fsPath);
+			return new ExtHostOutputChannelBackedByFile(name, appender, this._proxy);
+		} catch (error) {
+			// Do not crash if logger cannot be created
+			this.logService.error(error);
+			return new ExtHostPushOutputChannel(name, this._proxy);
 		}
 	}
 }

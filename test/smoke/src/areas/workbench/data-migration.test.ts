@@ -3,85 +3,92 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as assert from 'assert';
+import { Application, ApplicationOptions } from '../../../../automation';
+import { join } from 'path';
 
-import { SpectronApplication, STABLE_PATH, LATEST_PATH } from '../../spectron/application';
-import { Util } from '../../helpers/utilities';
+export function setup(stableCodePath: string, testDataPath: string) {
 
-describe('Data Migration', () => {
+	describe('Datamigration', () => {
+		it(`verifies opened editors are restored`, async function () {
+			if (!stableCodePath) {
+				this.skip();
+			}
 
-	if (!STABLE_PATH) {
-		return;
-	}
+			const userDataDir = join(testDataPath, 'd2'); // different data dir from the other tests
 
-	let app: SpectronApplication;
-	afterEach(() => app.stop());
+			const stableOptions: ApplicationOptions = Object.assign({}, this.defaultOptions);
+			stableOptions.codePath = stableCodePath;
+			stableOptions.userDataDir = userDataDir;
 
-	it('checks if the Untitled file is restored migrating from stable to latest', async function () {
-		const textToType = 'Very dirty file';
+			const stableApp = new Application(stableOptions);
+			await stableApp!.start();
 
-		// Setting up stable version
-		let app = new SpectronApplication(STABLE_PATH);
-		await app.start('Data Migration');
+			// Open 3 editors and pin 2 of them
+			await stableApp.workbench.quickaccess.openFile('www');
+			await stableApp.workbench.quickaccess.runCommand('View: Keep Editor');
 
-		await app.workbench.newUntitledFile();
-		await app.workbench.editor.waitForTypeInEditor('Untitled-1', textToType);
+			await stableApp.workbench.quickaccess.openFile('app.js');
+			await stableApp.workbench.quickaccess.runCommand('View: Keep Editor');
 
-		await app.stop();
-		await new Promise(c => setTimeout(c, 500)); // wait until all resources are released (e.g. locked local storage)
-		// Checking latest version for the restored state
+			await stableApp.workbench.editors.newUntitledFile();
 
-		app = new SpectronApplication(LATEST_PATH);
-		await app.start('Data Migration');
+			await stableApp.stop();
 
-		assert.ok(await app.workbench.waitForActiveTab('Untitled-1', true), `Untitled-1 tab is not present after migration.`);
+			const insiderOptions: ApplicationOptions = Object.assign({}, this.defaultOptions);
+			insiderOptions.userDataDir = userDataDir;
 
-		await app.workbench.editor.waitForEditorContents('Untitled-1', c => c.indexOf(textToType) > -1);
-		await app.screenCapturer.capture('Untitled file text');
+			const insidersApp = new Application(insiderOptions);
+			await insidersApp!.start(false /* not expecting walkthrough path */);
+
+			// Verify 3 editors are open
+			await insidersApp.workbench.editors.waitForEditorFocus('Untitled-1');
+			await insidersApp.workbench.editors.selectTab('app.js');
+			await insidersApp.workbench.editors.selectTab('www');
+
+			await insidersApp.stop();
+		});
+
+		it(`verifies that 'hot exit' works for dirty files`, async function () {
+			if (!stableCodePath) {
+				this.skip();
+			}
+
+			const userDataDir = join(testDataPath, 'd3'); // different data dir from the other tests
+
+			const stableOptions: ApplicationOptions = Object.assign({}, this.defaultOptions);
+			stableOptions.codePath = stableCodePath;
+			stableOptions.userDataDir = userDataDir;
+
+			const stableApp = new Application(stableOptions);
+			await stableApp!.start();
+
+			await stableApp.workbench.editors.newUntitledFile();
+
+			const untitled = 'Untitled-1';
+			const textToTypeInUntitled = 'Hello from Untitled';
+			await stableApp.workbench.editor.waitForTypeInEditor(untitled, textToTypeInUntitled);
+
+			const readmeMd = 'readme.md';
+			const textToType = 'Hello, Code';
+			await stableApp.workbench.quickaccess.openFile(readmeMd);
+			await stableApp.workbench.editor.waitForTypeInEditor(readmeMd, textToType);
+
+			await stableApp.stop();
+
+			const insiderOptions: ApplicationOptions = Object.assign({}, this.defaultOptions);
+			insiderOptions.userDataDir = userDataDir;
+
+			const insidersApp = new Application(insiderOptions);
+			await insidersApp!.start(false /* not expecting walkthrough path */);
+
+			await insidersApp.workbench.editors.waitForActiveTab(readmeMd, true);
+			await insidersApp.workbench.editor.waitForEditorContents(readmeMd, c => c.indexOf(textToType) > -1);
+
+			await insidersApp.workbench.editors.waitForTab(untitled, true);
+			await insidersApp.workbench.editors.selectTab(untitled);
+			await insidersApp.workbench.editor.waitForEditorContents(untitled, c => c.indexOf(textToTypeInUntitled) > -1);
+
+			await insidersApp.stop();
+		});
 	});
-
-	it('checks if the newly created dirty file is restored migrating from stable to latest', async function () {
-		const fileName = 'test_data/plainFile',
-			firstTextPart = 'This is going to be an unsaved file', secondTextPart = '_that is dirty.';
-
-		// Setting up stable version
-		let app = new SpectronApplication(STABLE_PATH, fileName);
-		await Util.removeFile(`${fileName}`);
-		await app.start('Data Migration');
-
-		await app.workbench.editor.waitForTypeInEditor('plainFile', firstTextPart);
-		await app.workbench.saveOpenedFile();
-		await app.workbench.editor.waitForTypeInEditor('plainFile', secondTextPart);
-
-		await app.stop();
-		await new Promise(c => setTimeout(c, 1000)); // wait until all resources are released (e.g. locked local storage)
-
-		// Checking latest version for the restored state
-		app = new SpectronApplication(LATEST_PATH);
-		await app.start('Data Migration');
-
-		const filename = fileName.split('/')[1];
-		assert.ok(await app.workbench.waitForActiveTab(filename), `Untitled-1 tab is not present after migration.`);
-		await app.workbench.editor.waitForEditorContents(filename, c => c.indexOf(firstTextPart + secondTextPart) > -1);
-
-		await Util.removeFile(`${fileName}`);
-	});
-
-	it('cheks if opened tabs are restored migrating from stable to latest', async function () {
-		const fileName1 = 'app.js', fileName2 = 'jsconfig.json', fileName3 = 'readme.md';
-		let app = new SpectronApplication(STABLE_PATH);
-		await app.start('Data Migration');
-
-		await app.workbench.quickopen.openFile(fileName1);
-		await app.workbench.quickopen.openFile(fileName2);
-		await app.workbench.quickopen.openFile(fileName3);
-		await app.stop();
-
-		app = new SpectronApplication(LATEST_PATH);
-		await app.start('Data Migration');
-
-		assert.ok(await app.workbench.waitForTab(fileName1), `${fileName1} tab was not restored after migration.`);
-		assert.ok(await app.workbench.waitForTab(fileName2), `${fileName2} tab was not restored after migration.`);
-		assert.ok(await app.workbench.waitForTab(fileName3), `${fileName3} tab was not restored after migration.`);
-	});
-});
+}

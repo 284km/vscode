@@ -3,42 +3,53 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import 'vs/editor/common/controller/coreCommands';
+import 'vs/editor/browser/controller/coreCommands';
 import 'vs/editor/browser/widget/codeEditorWidget';
 import 'vs/editor/browser/widget/diffEditorWidget';
 import 'vs/editor/browser/widget/diffNavigator';
+import 'vs/editor/contrib/anchorSelect/anchorSelect';
+import 'vs/editor/contrib/bracketMatching/bracketMatching';
+import 'vs/editor/contrib/caretOperations/caretOperations';
+import 'vs/editor/contrib/caretOperations/transpose';
+import 'vs/editor/contrib/clipboard/clipboard';
+import 'vs/editor/contrib/codeAction/codeActionContributions';
+import 'vs/editor/contrib/codelens/codelensController';
+import 'vs/editor/contrib/colorPicker/colorContributions';
+import 'vs/editor/contrib/comment/comment';
+import 'vs/editor/contrib/contextmenu/contextmenu';
+import 'vs/editor/contrib/cursorUndo/cursorUndo';
+import 'vs/editor/contrib/dnd/dnd';
+import 'vs/editor/contrib/find/findController';
+import 'vs/editor/contrib/folding/folding';
+import 'vs/editor/contrib/fontZoom/fontZoom';
+import 'vs/editor/contrib/format/formatActions';
+import 'vs/editor/contrib/documentSymbols/documentSymbols';
+import 'vs/editor/contrib/gotoSymbol/goToCommands';
+import 'vs/editor/contrib/gotoSymbol/link/goToDefinitionAtPosition';
+import 'vs/editor/contrib/gotoError/gotoError';
+import 'vs/editor/contrib/hover/hover';
+import 'vs/editor/contrib/indentation/indentation';
+import 'vs/editor/contrib/inlineHints/inlineHintsController';
+import 'vs/editor/contrib/inPlaceReplace/inPlaceReplace';
+import 'vs/editor/contrib/linesOperations/linesOperations';
+import 'vs/editor/contrib/linkedEditing/linkedEditing';
+import 'vs/editor/contrib/links/links';
+import 'vs/editor/contrib/multicursor/multicursor';
+import 'vs/editor/contrib/parameterHints/parameterHints';
+import 'vs/editor/contrib/rename/rename';
+import 'vs/editor/contrib/smartSelect/smartSelect';
+import 'vs/editor/contrib/snippet/snippetController2';
+import 'vs/editor/contrib/suggest/suggestController';
+import 'vs/editor/contrib/tokenization/tokenization';
+import 'vs/editor/contrib/toggleTabFocusMode/toggleTabFocusMode';
+import 'vs/editor/contrib/unusualLineTerminators/unusualLineTerminators';
+import 'vs/editor/contrib/viewportSemanticTokens/viewportSemanticTokens';
+import 'vs/editor/contrib/wordHighlighter/wordHighlighter';
+import 'vs/editor/contrib/wordOperations/wordOperations';
+import 'vs/editor/contrib/wordPartOperations/wordPartOperations';
 
-import 'vs/editor/contrib/bracketMatching/common/bracketMatching';
-import 'vs/css!vs/editor/contrib/bracketMatching/browser/bracketMatching';
-import 'vs/editor/contrib/caretOperations/common/caretOperations';
-import 'vs/editor/contrib/caretOperations/common/transpose';
-import 'vs/editor/contrib/clipboard/browser/clipboard';
-import 'vs/editor/contrib/codelens/browser/codelensController';
-import 'vs/editor/contrib/comment/common/comment';
-import 'vs/editor/contrib/contextmenu/browser/contextmenu';
-import 'vs/editor/contrib/cursorUndo/browser/cursorUndo';
-import 'vs/editor/contrib/dnd/browser/dnd';
-import 'vs/editor/contrib/find/browser/find';
-import 'vs/editor/contrib/folding/browser/folding';
-import 'vs/editor/contrib/format/browser/formatActions';
-import 'vs/editor/contrib/goToDeclaration/browser/goToDeclarationCommands';
-import 'vs/editor/contrib/goToDeclaration/browser/goToDeclarationMouse';
-import 'vs/editor/contrib/gotoError/browser/gotoError';
-import 'vs/editor/contrib/hover/browser/hover';
-import 'vs/editor/contrib/inPlaceReplace/common/inPlaceReplace';
-import 'vs/editor/contrib/linesOperations/common/linesOperations';
-import 'vs/editor/contrib/links/browser/links';
-import 'vs/editor/contrib/multicursor/common/multicursor';
-import 'vs/editor/contrib/parameterHints/browser/parameterHints';
-import 'vs/editor/contrib/quickFix/browser/quickFixCommands';
-import 'vs/editor/contrib/referenceSearch/browser/referenceSearch';
-import 'vs/editor/contrib/rename/browser/rename';
-import 'vs/editor/contrib/smartSelect/common/smartSelect';
-import 'vs/editor/contrib/snippet/browser/snippetController2';
-import 'vs/editor/contrib/suggest/browser/suggestController';
-import 'vs/editor/contrib/toggleTabFocusMode/common/toggleTabFocusMode';
-import 'vs/editor/contrib/wordHighlighter/common/wordHighlighter';
-import 'vs/editor/contrib/wordOperations/common/wordOperations';
-import 'vs/editor/contrib/colorPicker/browser/colorDetector';
+// Load up these strings even in VSCode, even if they are not used
+// in order to get them translated
+import 'vs/editor/common/standaloneStrings';
+
+import 'vs/base/browser/ui/codicons/codiconStyles'; // The codicons are defined here and must be loaded

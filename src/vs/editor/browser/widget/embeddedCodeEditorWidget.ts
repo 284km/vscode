@@ -2,25 +2,28 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as objects from 'vs/base/common/objects';
-import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
+import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { ICodeEditorService } from 'vs/editor/browser/services/codeEditorService';
+import { CodeEditorWidget } from 'vs/editor/browser/widget/codeEditorWidget';
+import { DiffEditorWidget } from 'vs/editor/browser/widget/diffEditorWidget';
+import { ConfigurationChangedEvent, IDiffEditorOptions, IEditorOptions } from 'vs/editor/common/config/editorOptions';
+import { IEditorWorkerService } from 'vs/editor/common/services/editorWorkerService';
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
-import { ICodeEditorService } from 'vs/editor/common/services/codeEditorService';
-import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
-import { CodeEditor } from 'vs/editor/browser/codeEditor';
-import { IConfigurationChangedEvent, IEditorOptions, IDiffEditorOptions } from 'vs/editor/common/config/editorOptions';
+import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
+import { INotificationService } from 'vs/platform/notification/common/notification';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
-import { DiffEditorWidget } from 'vs/editor/browser/widget/diffEditorWidget';
-import { IEditorWorkerService } from 'vs/editor/common/services/editorWorkerService';
-import { IMessageService } from 'vs/platform/message/common/message';
+import { IAccessibilityService } from 'vs/platform/accessibility/common/accessibility';
+import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
+import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
+import { IEditorProgressService } from 'vs/platform/progress/common/progress';
 
-export class EmbeddedCodeEditorWidget extends CodeEditor {
+export class EmbeddedCodeEditorWidget extends CodeEditorWidget {
 
-	private _parentEditor: ICodeEditor;
-	private _overwriteOptions: IEditorOptions;
+	private readonly _parentEditor: ICodeEditor;
+	private readonly _overwriteOptions: IEditorOptions;
 
 	constructor(
 		domElement: HTMLElement,
@@ -30,9 +33,11 @@ export class EmbeddedCodeEditorWidget extends CodeEditor {
 		@ICodeEditorService codeEditorService: ICodeEditorService,
 		@ICommandService commandService: ICommandService,
 		@IContextKeyService contextKeyService: IContextKeyService,
-		@IThemeService themeService: IThemeService
+		@IThemeService themeService: IThemeService,
+		@INotificationService notificationService: INotificationService,
+		@IAccessibilityService accessibilityService: IAccessibilityService
 	) {
-		super(domElement, parentEditor.getRawConfiguration(), instantiationService, codeEditorService, commandService, contextKeyService, themeService);
+		super(domElement, { ...parentEditor.getRawOptions(), overflowWidgetsDomNode: parentEditor.getOverflowWidgetsDomNode() }, {}, instantiationService, codeEditorService, commandService, contextKeyService, themeService, notificationService, accessibilityService);
 
 		this._parentEditor = parentEditor;
 		this._overwriteOptions = options;
@@ -40,15 +45,15 @@ export class EmbeddedCodeEditorWidget extends CodeEditor {
 		// Overwrite parent's options
 		super.updateOptions(this._overwriteOptions);
 
-		this._register(parentEditor.onDidChangeConfiguration((e: IConfigurationChangedEvent) => this._onParentConfigurationChanged(e)));
+		this._register(parentEditor.onDidChangeConfiguration((e: ConfigurationChangedEvent) => this._onParentConfigurationChanged(e)));
 	}
 
 	getParentEditor(): ICodeEditor {
 		return this._parentEditor;
 	}
 
-	private _onParentConfigurationChanged(e: IConfigurationChangedEvent): void {
-		super.updateOptions(this._parentEditor.getRawConfiguration());
+	private _onParentConfigurationChanged(e: ConfigurationChangedEvent): void {
+		super.updateOptions(this._parentEditor.getRawOptions());
 		super.updateOptions(this._overwriteOptions);
 	}
 
@@ -60,8 +65,8 @@ export class EmbeddedCodeEditorWidget extends CodeEditor {
 
 export class EmbeddedDiffEditorWidget extends DiffEditorWidget {
 
-	private _parentEditor: ICodeEditor;
-	private _overwriteOptions: IDiffEditorOptions;
+	private readonly _parentEditor: ICodeEditor;
+	private readonly _overwriteOptions: IDiffEditorOptions;
 
 	constructor(
 		domElement: HTMLElement,
@@ -72,9 +77,12 @@ export class EmbeddedDiffEditorWidget extends DiffEditorWidget {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@ICodeEditorService codeEditorService: ICodeEditorService,
 		@IThemeService themeService: IThemeService,
-		@IMessageService messageService: IMessageService
+		@INotificationService notificationService: INotificationService,
+		@IContextMenuService contextMenuService: IContextMenuService,
+		@IClipboardService clipboardService: IClipboardService,
+		@IEditorProgressService editorProgressService: IEditorProgressService,
 	) {
-		super(domElement, parentEditor.getRawConfiguration(), editorWorkerService, contextKeyService, instantiationService, codeEditorService, themeService, messageService);
+		super(domElement, parentEditor.getRawOptions(), {}, clipboardService, editorWorkerService, contextKeyService, instantiationService, codeEditorService, themeService, notificationService, contextMenuService, editorProgressService);
 
 		this._parentEditor = parentEditor;
 		this._overwriteOptions = options;
@@ -89,8 +97,8 @@ export class EmbeddedDiffEditorWidget extends DiffEditorWidget {
 		return this._parentEditor;
 	}
 
-	private _onParentConfigurationChanged(e: IConfigurationChangedEvent): void {
-		super.updateOptions(this._parentEditor.getRawConfiguration());
+	private _onParentConfigurationChanged(e: ConfigurationChangedEvent): void {
+		super.updateOptions(this._parentEditor.getRawOptions());
 		super.updateOptions(this._overwriteOptions);
 	}
 

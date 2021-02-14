@@ -2,7 +2,6 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as assert from 'assert';
 import { SmoothScrollingOperation, SmoothScrollingUpdate } from 'vs/base/common/scrollable';
@@ -58,7 +57,7 @@ suite('SmoothScrollingOperation', () => {
 
 	function assertSmoothScroll(from: number, to: number, expected: [number, number][]): void {
 		const actual = simulateSmoothScroll(from, to);
-		assert.deepEqual(actual, expected);
+		assert.deepStrictEqual(actual, expected);
 	}
 
 	test('scroll 25 lines (40 fit)', () => {

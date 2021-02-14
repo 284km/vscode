@@ -4,8 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { HtmlNode } from 'EmmetNode';
-import { getNode, parseDocument, validate } from './util';
+import { getHtmlFlatNode, offsetRangeToSelection, validate } from './util';
+import { getRootNode } from './parseDocument';
+import { HtmlNode as HtmlFlatNode } from 'EmmetFlatNode';
+
+let balanceOutStack: Array<vscode.Selection[]> = [];
+let lastBalancedSelections: vscode.Selection[] = [];
 
 export function balanceOut() {
 	balance(true);
@@ -16,38 +20,55 @@ export function balanceIn() {
 }
 
 function balance(out: boolean) {
-	let editor = vscode.window.activeTextEditor;
-	if (!validate(false)) {
+	if (!validate(false) || !vscode.window.activeTextEditor) {
 		return;
 	}
-
-	let rootNode = <HtmlNode>parseDocument(editor.document);
+	const editor = vscode.window.activeTextEditor;
+	const document = editor.document;
+	const rootNode = <HtmlFlatNode>getRootNode(document, true);
 	if (!rootNode) {
 		return;
 	}
 
-	let getRangeFunction = out ? getRangeToBalanceOut : getRangeToBalanceIn;
+	const rangeFn = out ? getRangeToBalanceOut : getRangeToBalanceIn;
 	let newSelections: vscode.Selection[] = [];
 	editor.selections.forEach(selection => {
-		let range = getRangeFunction(editor.document, selection, rootNode);
-		newSelections.push(range ? range : selection);
+		const range = rangeFn(document, rootNode, selection);
+		newSelections.push(range);
 	});
 
-	editor.selection = newSelections[0];
+	// check whether we are starting a balance elsewhere
+	if (areSameSelections(lastBalancedSelections, editor.selections)) {
+		// we are not starting elsewhere, so use the stack as-is
+		if (out) {
+			// make sure we are able to expand outwards
+			if (!areSameSelections(editor.selections, newSelections)) {
+				balanceOutStack.push(editor.selections);
+			}
+		} else if (balanceOutStack.length) {
+			newSelections = balanceOutStack.pop()!;
+		}
+	} else {
+		// we are starting elsewhere, so reset the stack
+		balanceOutStack = out ? [editor.selections] : [];
+	}
+
 	editor.selections = newSelections;
+	lastBalancedSelections = editor.selections;
 }
 
-function getRangeToBalanceOut(document: vscode.TextDocument, selection: vscode.Selection, rootNode: HtmlNode): vscode.Selection {
-	let nodeToBalance = <HtmlNode>getNode(rootNode, selection.start);
+function getRangeToBalanceOut(document: vscode.TextDocument, rootNode: HtmlFlatNode, selection: vscode.Selection): vscode.Selection {
+	const offset = document.offsetAt(selection.start);
+	const nodeToBalance = getHtmlFlatNode(document.getText(), rootNode, offset, false);
 	if (!nodeToBalance) {
-		return;
+		return selection;
 	}
-	if (!nodeToBalance.close) {
-		return new vscode.Selection(nodeToBalance.start, nodeToBalance.end);
+	if (!nodeToBalance.open || !nodeToBalance.close) {
+		return offsetRangeToSelection(document, nodeToBalance.start, nodeToBalance.end);
 	}
 
-	let innerSelection = new vscode.Selection(nodeToBalance.open.end, nodeToBalance.close.start);
-	let outerSelection = new vscode.Selection(nodeToBalance.start, nodeToBalance.end);
+	const innerSelection = offsetRangeToSelection(document, nodeToBalance.open.end, nodeToBalance.close.start);
+	const outerSelection = offsetRangeToSelection(document, nodeToBalance.open.start, nodeToBalance.close.end);
 
 	if (innerSelection.contains(selection) && !innerSelection.isEqual(selection)) {
 		return innerSelection;
@@ -55,32 +76,51 @@ function getRangeToBalanceOut(document: vscode.TextDocument, selection: vscode.S
 	if (outerSelection.contains(selection) && !outerSelection.isEqual(selection)) {
 		return outerSelection;
 	}
-	return;
+	return selection;
 }
 
-function getRangeToBalanceIn(document: vscode.TextDocument, selection: vscode.Selection, rootNode: HtmlNode): vscode.Selection {
-	let nodeToBalance = <HtmlNode>getNode(rootNode, selection.start, true);
+function getRangeToBalanceIn(document: vscode.TextDocument, rootNode: HtmlFlatNode, selection: vscode.Selection): vscode.Selection {
+	const offset = document.offsetAt(selection.start);
+	const nodeToBalance = getHtmlFlatNode(document.getText(), rootNode, offset, true);
 	if (!nodeToBalance) {
-		return;
+		return selection;
 	}
 
-	if (selection.start.isEqual(nodeToBalance.start)
-		&& selection.end.isEqual(nodeToBalance.end)
-		&& nodeToBalance.close) {
-		return new vscode.Selection(nodeToBalance.open.end, nodeToBalance.close.start);
+	const selectionStart = document.offsetAt(selection.start);
+	const selectionEnd = document.offsetAt(selection.end);
+	if (nodeToBalance.open && nodeToBalance.close) {
+		const entireNodeSelected = selectionStart === nodeToBalance.start && selectionEnd === nodeToBalance.end;
+		const startInOpenTag = selectionStart > nodeToBalance.open.start && selectionStart < nodeToBalance.open.end;
+		const startInCloseTag = selectionStart > nodeToBalance.close.start && selectionStart < nodeToBalance.close.end;
+
+		if (entireNodeSelected || startInOpenTag || startInCloseTag) {
+			return offsetRangeToSelection(document, nodeToBalance.open.end, nodeToBalance.close.start);
+		}
 	}
 
 	if (!nodeToBalance.firstChild) {
-		return;
+		return selection;
 	}
 
-	if (selection.start.isEqual(nodeToBalance.firstChild.start)
-		&& selection.end.isEqual(nodeToBalance.firstChild.end)
-		&& nodeToBalance.firstChild.close) {
-		return new vscode.Selection(nodeToBalance.firstChild.open.end, nodeToBalance.firstChild.close.start);
+	const firstChild = nodeToBalance.firstChild;
+	if (selectionStart === firstChild.start
+		&& selectionEnd === firstChild.end
+		&& firstChild.open
+		&& firstChild.close) {
+		return offsetRangeToSelection(document, firstChild.open.end, firstChild.close.start);
 	}
 
-	return new vscode.Selection(nodeToBalance.firstChild.start, nodeToBalance.firstChild.end);
-
+	return offsetRangeToSelection(document, firstChild.start, firstChild.end);
 }
 
+function areSameSelections(a: vscode.Selection[], b: vscode.Selection[]): boolean {
+	if (a.length !== b.length) {
+		return false;
+	}
+	for (let i = 0; i < a.length; i++) {
+		if (!a[i].isEqual(b[i])) {
+			return false;
+		}
+	}
+	return true;
+}

@@ -3,36 +3,37 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as assert from 'assert';
+import { Application, ActivityBarPosition } from '../../../../automation';
 
-import { SpectronApplication } from '../../spectron/application';
-import { ActivityBarPosition } from '../activitybar/activityBar';
+export function setup() {
+	describe('Preferences', () => {
+		it('turns off editor line numbers and verifies the live change', async function () {
+			const app = this.app as Application;
 
-describe('Preferences', () => {
-	let app: SpectronApplication;
-	before(() => { app = new SpectronApplication(); return app.start('Preferences'); });
-	after(() => app.stop());
+			await app.workbench.quickaccess.openFile('app.js');
+			await app.code.waitForElements('.line-numbers', false, elements => !!elements.length);
 
-	it('turns off editor line numbers and verifies the live change', async function () {
-		await app.workbench.explorer.openFile('app.js');
-		let lineNumbers = await app.client.waitForElements('.line-numbers');
-		await app.screenCapturer.capture('app.js has line numbers');
-		assert.ok(!!lineNumbers.length, 'Line numbers are not present in the editor before disabling them.');
+			await app.workbench.settingsEditor.addUserSetting('editor.lineNumbers', '"off"');
+			await app.workbench.editors.selectTab('app.js');
+			await app.code.waitForElements('.line-numbers', false, result => !result || result.length === 0);
+		});
 
-		await app.workbench.settingsEditor.addUserSetting('editor.lineNumbers', '"off"');
-		await app.workbench.selectTab('app.js');
-		lineNumbers = await app.client.waitForElements('.line-numbers', result => !result || result.length === 0);
+		it(`changes 'workbench.action.toggleSidebarPosition' command key binding and verifies it`, async function () {
+			const app = this.app as Application;
+			await app.workbench.activitybar.waitForActivityBar(ActivityBarPosition.LEFT);
 
-		await app.screenCapturer.capture('line numbers hidden');
-		assert.ok(!lineNumbers.length, 'Line numbers are still present in the editor after disabling them.');
+			await app.workbench.keybindingsEditor.updateKeybinding('workbench.action.toggleSidebarPosition', 'View: Toggle Side Bar Position', 'ctrl+u', 'Control+U');
+
+			await app.code.dispatchKeybinding('ctrl+u');
+			await app.workbench.activitybar.waitForActivityBar(ActivityBarPosition.RIGHT);
+		});
+
+		after(async function () {
+			const app = this.app as Application;
+			await app.workbench.settingsEditor.clearUserSettings();
+
+			// Wait for settings to be applied, which will happen after the settings file is empty
+			await app.workbench.activitybar.waitForActivityBar(ActivityBarPosition.LEFT);
+		});
 	});
-
-	it(`changes 'workbench.action.toggleSidebarPosition' command key binding and verifies it`, async function () {
-		assert.ok(await app.workbench.activitybar.getActivityBar(ActivityBarPosition.LEFT), 'Activity bar should be positioned on the left.');
-
-		await app.workbench.keybindingsEditor.updateKeybinding('workbench.action.toggleSidebarPosition', ['Control', 'u'], 'Control+U');
-
-		await app.client.keys(['Control', 'u', 'NULL']);
-		assert.ok(await app.workbench.activitybar.getActivityBar(ActivityBarPosition.RIGHT), 'Activity bar was not moved to right after toggling its position.');
-	});
-});
+}

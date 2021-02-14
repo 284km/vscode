@@ -1,4 +1,4 @@
 test/**
 src/**/*.ts
 tsconfig.json
-npm-shrinkwrap.json
+cgmanifest.json

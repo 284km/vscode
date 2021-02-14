@@ -1,11 +1,15 @@
 {
   "name": "vscode-extensions",
   "version": "0.0.1",
+  "license": "MIT",
   "description": "Dependencies shared by all extensions",
   "dependencies": {
-    "typescript": "2.6.1-insiders.20171019"
+    "typescript": "insiders"
   },
   "scripts": {
     "postinstall": "node ./postinstall"
+  },
+  "devDependencies": {
+    "vscode-grammar-updater": "^1.0.3"
   }
 }

@@ -3,108 +3,136 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
+export namespace Iterable {
 
-export interface IIterator<E> {
-	next(): { done: boolean, value: E };
-}
-
-export interface INextIterator<T> {
-	next(): T;
-}
-
-export class ArrayIterator<T> implements INextIterator<T> {
-
-	private items: T[];
-	protected start: number;
-	protected end: number;
-	protected index: number;
-
-	constructor(items: T[], start: number = 0, end: number = items.length) {
-		this.items = items;
-		this.start = start;
-		this.end = end;
-		this.index = start - 1;
+	export function is<T = any>(thing: any): thing is IterableIterator<T> {
+		return thing && typeof thing === 'object' && typeof thing[Symbol.iterator] === 'function';
 	}
 
-	public first(): T {
-		this.index = this.start;
-		return this.current();
+	const _empty: Iterable<any> = Object.freeze([]);
+	export function empty<T = any>(): Iterable<T> {
+		return _empty;
 	}
 
-	public next(): T {
-		this.index = Math.min(this.index + 1, this.end);
-		return this.current();
+	export function* single<T>(element: T): Iterable<T> {
+		yield element;
 	}
 
-	protected current(): T {
-		if (this.index === this.start - 1 || this.index === this.end) {
-			return null;
+	export function from<T>(iterable: Iterable<T> | undefined | null): Iterable<T> {
+		return iterable || _empty;
+	}
+
+	export function isEmpty<T>(iterable: Iterable<T> | undefined | null): boolean {
+		return !iterable || iterable[Symbol.iterator]().next().done === true;
+	}
+
+	export function first<T>(iterable: Iterable<T>): T | undefined {
+		return iterable[Symbol.iterator]().next().value;
+	}
+
+	export function some<T>(iterable: Iterable<T>, predicate: (t: T) => boolean): boolean {
+		for (const element of iterable) {
+			if (predicate(element)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	export function find<T, R extends T>(iterable: Iterable<T>, predicate: (t: T) => t is R): T | undefined;
+	export function find<T>(iterable: Iterable<T>, predicate: (t: T) => boolean): T | undefined;
+	export function find<T>(iterable: Iterable<T>, predicate: (t: T) => boolean): T | undefined {
+		for (const element of iterable) {
+			if (predicate(element)) {
+				return element;
+			}
 		}
 
-		return this.items[this.index];
-	}
-}
-
-export class ArrayNavigator<T> extends ArrayIterator<T> implements INavigator<T> {
-
-	constructor(items: T[], start: number = 0, end: number = items.length) {
-		super(items, start, end);
+		return undefined;
 	}
 
-	public current(): T {
-		return super.current();
+	export function filter<T, R extends T>(iterable: Iterable<T>, predicate: (t: T) => t is R): Iterable<R>;
+	export function filter<T>(iterable: Iterable<T>, predicate: (t: T) => boolean): Iterable<T>;
+	export function* filter<T>(iterable: Iterable<T>, predicate: (t: T) => boolean): Iterable<T> {
+		for (const element of iterable) {
+			if (predicate(element)) {
+				yield element;
+			}
+		}
 	}
 
-	public previous(): T {
-		this.index = Math.max(this.index - 1, this.start - 1);
-		return this.current();
+	export function* map<T, R>(iterable: Iterable<T>, fn: (t: T) => R): Iterable<R> {
+		for (const element of iterable) {
+			yield fn(element);
+		}
 	}
 
-	public first(): T {
-		this.index = this.start;
-		return this.current();
+	export function* concat<T>(...iterables: Iterable<T>[]): Iterable<T> {
+		for (const iterable of iterables) {
+			for (const element of iterable) {
+				yield element;
+			}
+		}
 	}
 
-	public last(): T {
-		this.index = this.end - 1;
-		return this.current();
+	export function* concatNested<T>(iterables: Iterable<Iterable<T>>): Iterable<T> {
+		for (const iterable of iterables) {
+			for (const element of iterable) {
+				yield element;
+			}
+		}
 	}
 
-	public parent(): T {
-		return null;
+	export function reduce<T, R>(iterable: Iterable<T>, reducer: (previousValue: R, currentValue: T) => R, initialValue: R): R {
+		let value = initialValue;
+		for (const element of iterable) {
+			value = reducer(value, element);
+		}
+		return value;
 	}
 
-}
+	/**
+	 * Returns an iterable slice of the array, with the same semantics as `array.slice()`.
+	 */
+	export function* slice<T>(iterable: ReadonlyArray<T>, from: number, to = iterable.length): Iterable<T> {
+		if (from < 0) {
+			from += iterable.length;
+		}
 
-export class MappedIterator<T, R> implements INextIterator<R> {
+		if (to < 0) {
+			to += iterable.length;
+		} else if (to > iterable.length) {
+			to = iterable.length;
+		}
 
-	constructor(protected iterator: INextIterator<T>, protected fn: (item: T) => R) {
-		// noop
+		for (; from < to; from++) {
+			yield iterable[from];
+		}
 	}
 
-	next() { return this.fn(this.iterator.next()); }
-}
+	/**
+	 * Consumes `atMost` elements from iterable and returns the consumed elements,
+	 * and an iterable for the rest of the elements.
+	 */
+	export function consume<T>(iterable: Iterable<T>, atMost: number = Number.POSITIVE_INFINITY): [T[], Iterable<T>] {
+		const consumed: T[] = [];
 
-export interface INavigator<T> extends INextIterator<T> {
-	current(): T;
-	previous(): T;
-	parent(): T;
-	first(): T;
-	last(): T;
-	next(): T;
-}
+		if (atMost === 0) {
+			return [consumed, iterable];
+		}
 
-export class MappedNavigator<T, R> extends MappedIterator<T, R> implements INavigator<R> {
+		const iterator = iterable[Symbol.iterator]();
 
-	constructor(protected navigator: INavigator<T>, fn: (item: T) => R) {
-		super(navigator, fn);
+		for (let i = 0; i < atMost; i++) {
+			const next = iterator.next();
+
+			if (next.done) {
+				return [consumed, Iterable.empty()];
+			}
+
+			consumed.push(next.value);
+		}
+
+		return [consumed, { [Symbol.iterator]() { return iterator; } }];
 	}
-
-	current() { return this.fn(this.navigator.current()); }
-	previous() { return this.fn(this.navigator.previous()); }
-	parent() { return this.fn(this.navigator.parent()); }
-	first() { return this.fn(this.navigator.first()); }
-	last() { return this.fn(this.navigator.last()); }
-	next() { return this.fn(this.navigator.next()); }
 }

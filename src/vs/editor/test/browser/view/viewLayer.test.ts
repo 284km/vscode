@@ -2,10 +2,9 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as assert from 'assert';
-import { RenderedLinesCollection, ILine } from 'vs/editor/browser/view/viewLayer';
+import { ILine, RenderedLinesCollection } from 'vs/editor/browser/view/viewLayer';
 
 class TestLine implements ILine {
 
@@ -37,7 +36,7 @@ function assertState(col: RenderedLinesCollection<TestLine>, state: ILinesCollec
 		actualState.lines.push(col.getLine(lineNumber).id);
 		actualState.pinged.push(col.getLine(lineNumber)._pinged);
 	}
-	assert.deepEqual(actualState, state);
+	assert.deepStrictEqual(actualState, state);
 }
 
 suite('RenderedLinesCollection onLinesDeleted', () => {
@@ -55,7 +54,7 @@ suite('RenderedLinesCollection onLinesDeleted', () => {
 		if (actualDeleted1) {
 			actualDeleted = actualDeleted1.map(line => line.id);
 		}
-		assert.deepEqual(actualDeleted, expectedDeleted);
+		assert.deepStrictEqual(actualDeleted, expectedDeleted);
 		assertState(col, expectedState);
 	}
 
@@ -326,7 +325,7 @@ suite('RenderedLinesCollection onLineChanged', () => {
 			new TestLine('old9')
 		]);
 		let actualPinged = col.onLinesChanged(changedLineNumber, changedLineNumber);
-		assert.deepEqual(actualPinged, expectedPinged);
+		assert.deepStrictEqual(actualPinged, expectedPinged);
 		assertState(col, expectedState);
 	}
 
@@ -411,7 +410,7 @@ suite('RenderedLinesCollection onLinesInserted', () => {
 		if (actualDeleted1) {
 			actualDeleted = actualDeleted1.map(line => line.id);
 		}
-		assert.deepEqual(actualDeleted, expectedDeleted);
+		assert.deepStrictEqual(actualDeleted, expectedDeleted);
 		assertState(col, expectedState);
 	}
 
@@ -683,7 +682,7 @@ suite('RenderedLinesCollection onTokensChanged', () => {
 			new TestLine('old9')
 		]);
 		let actualPinged = col.onTokensChanged([{ fromLineNumber: changedFromLineNumber, toLineNumber: changedToLineNumber }]);
-		assert.deepEqual(actualPinged, expectedPinged);
+		assert.deepStrictEqual(actualPinged, expectedPinged);
 		assertState(col, expectedState);
 	}
 

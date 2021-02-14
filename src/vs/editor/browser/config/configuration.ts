@@ -2,25 +2,25 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import Event, { Emitter } from 'vs/base/common/event';
+import * as browser from 'vs/base/browser/browser';
+import { FastDomNode } from 'vs/base/browser/fastDomNode';
+import { Emitter, Event } from 'vs/base/common/event';
 import { Disposable } from 'vs/base/common/lifecycle';
 import * as platform from 'vs/base/common/platform';
-import * as browser from 'vs/base/browser/browser';
-import { CommonEditorConfiguration, IEnvConfiguration } from 'vs/editor/common/config/commonEditorConfig';
-import { IDimension } from 'vs/editor/common/editorCommon';
-import { FontInfo, BareFontInfo } from 'vs/editor/common/config/fontInfo';
-import { ElementSizeObserver } from 'vs/editor/browser/config/elementSizeObserver';
-import { FastDomNode } from 'vs/base/browser/fastDomNode';
 import { CharWidthRequest, CharWidthRequestType, readCharWidths } from 'vs/editor/browser/config/charWidthReader';
-import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
-import { IEditorOptions } from 'vs/editor/common/config/editorOptions';
+import { ElementSizeObserver } from 'vs/editor/browser/config/elementSizeObserver';
+import { CommonEditorConfiguration, IEnvConfiguration } from 'vs/editor/common/config/commonEditorConfig';
+import { EditorOption, EditorFontLigatures } from 'vs/editor/common/config/editorOptions';
+import { BareFontInfo, FontInfo, SERIALIZED_FONT_INFO_VERSION } from 'vs/editor/common/config/fontInfo';
+import { IDimension } from 'vs/editor/common/editorCommon';
+import { IAccessibilityService, AccessibilitySupport } from 'vs/platform/accessibility/common/accessibility';
+import { IEditorConstructionOptions } from 'vs/editor/browser/editorBrowser';
 
 class CSSBasedConfigurationCache {
 
-	private _keys: { [key: string]: BareFontInfo; };
-	private _values: { [key: string]: FontInfo; };
+	private readonly _keys: { [key: string]: BareFontInfo; };
+	private readonly _values: { [key: string]: FontInfo; };
 
 	constructor() {
 		this._keys = Object.create(null);
@@ -28,29 +28,25 @@ class CSSBasedConfigurationCache {
 	}
 
 	public has(item: BareFontInfo): boolean {
-		let itemId = item.getId();
+		const itemId = item.getId();
 		return !!this._values[itemId];
 	}
 
 	public get(item: BareFontInfo): FontInfo {
-		let itemId = item.getId();
+		const itemId = item.getId();
 		return this._values[itemId];
 	}
 
 	public put(item: BareFontInfo, value: FontInfo): void {
-		let itemId = item.getId();
+		const itemId = item.getId();
 		this._keys[itemId] = item;
 		this._values[itemId] = value;
 	}
 
 	public remove(item: BareFontInfo): void {
-		let itemId = item.getId();
+		const itemId = item.getId();
 		delete this._keys[itemId];
 		delete this._values[itemId];
-	}
-
-	public getKeys(): BareFontInfo[] {
-		return Object.keys(this._keys).map(id => this._keys[id]);
 	}
 
 	public getValues(): FontInfo[] {
@@ -58,55 +54,56 @@ class CSSBasedConfigurationCache {
 	}
 }
 
+export function clearAllFontInfos(): void {
+	CSSBasedConfiguration.INSTANCE.clearCache();
+}
+
 export function readFontInfo(bareFontInfo: BareFontInfo): FontInfo {
 	return CSSBasedConfiguration.INSTANCE.readConfiguration(bareFontInfo);
 }
 
-export function restoreFontInfo(storageService: IStorageService): void {
-	let strStoredFontInfo = storageService.get('editorFontInfo', StorageScope.GLOBAL);
-	if (typeof strStoredFontInfo !== 'string') {
-		return;
-	}
-	let storedFontInfo: ISerializedFontInfo[] = null;
-	try {
-		storedFontInfo = JSON.parse(strStoredFontInfo);
-	} catch (err) {
-		return;
-	}
-	if (!Array.isArray(storedFontInfo)) {
-		return;
-	}
-	CSSBasedConfiguration.INSTANCE.restoreFontInfo(storedFontInfo);
+export function restoreFontInfo(fontInfo: ISerializedFontInfo[]): void {
+	CSSBasedConfiguration.INSTANCE.restoreFontInfo(fontInfo);
 }
 
-export function saveFontInfo(storageService: IStorageService): void {
-	let knownFontInfo = CSSBasedConfiguration.INSTANCE.saveFontInfo();
-	storageService.store('editorFontInfo', JSON.stringify(knownFontInfo), StorageScope.GLOBAL);
+export function serializeFontInfo(): ISerializedFontInfo[] | null {
+	const fontInfo = CSSBasedConfiguration.INSTANCE.saveFontInfo();
+	if (fontInfo.length > 0) {
+		return fontInfo;
+	}
+
+	return null;
 }
 
 export interface ISerializedFontInfo {
+	readonly version: number;
 	readonly zoomLevel: number;
+	readonly pixelRatio: number;
 	readonly fontFamily: string;
 	readonly fontWeight: string;
 	readonly fontSize: number;
+	readonly fontFeatureSettings: string;
 	readonly lineHeight: number;
 	readonly letterSpacing: number;
 	readonly isMonospace: boolean;
 	readonly typicalHalfwidthCharacterWidth: number;
 	readonly typicalFullwidthCharacterWidth: number;
+	readonly canUseHalfwidthRightwardsArrow: boolean;
 	readonly spaceWidth: number;
+	readonly middotWidth: number;
+	readonly wsmiddotWidth: number;
 	readonly maxDigitWidth: number;
 }
 
 class CSSBasedConfiguration extends Disposable {
 
-	public static INSTANCE = new CSSBasedConfiguration();
+	public static readonly INSTANCE = new CSSBasedConfiguration();
 
 	private _cache: CSSBasedConfigurationCache;
-	private _evictUntrustedReadingsTimeout: number;
+	private _evictUntrustedReadingsTimeout: any;
 
 	private _onDidChange = this._register(new Emitter<void>());
-	public onDidChange: Event<void> = this._onDidChange.event;
+	public readonly onDidChange: Event<void> = this._onDidChange.event;
 
 	constructor() {
 		super();
@@ -123,6 +120,11 @@ class CSSBasedConfiguration extends Disposable {
 		super.dispose();
 	}
 
+	public clearCache(): void {
+		this._cache = new CSSBasedConfigurationCache();
+		this._onDidChange.fire();
+	}
+
 	private _writeToCache(item: BareFontInfo, value: FontInfo): void {
 		this._cache.put(item, value);
 
@@ -136,10 +138,9 @@ class CSSBasedConfiguration extends Disposable {
 	}
 
 	private _evictUntrustedReadings(): void {
-		let values = this._cache.getValues();
+		const values = this._cache.getValues();
 		let somethingRemoved = false;
-		for (let i = 0, len = values.length; i < len; i++) {
-			let item = values[i];
+		for (const item of values) {
 			if (!item.isTrusted) {
 				somethingRemoved = true;
 				this._cache.remove(item);
@@ -155,11 +156,15 @@ class CSSBasedConfiguration extends Disposable {
 		return this._cache.getValues().filter(item => item.isTrusted);
 	}
 
-	public restoreFontInfo(savedFontInfo: ISerializedFontInfo[]): void {
+	public restoreFontInfo(savedFontInfos: ISerializedFontInfo[]): void {
 		// Take all the saved font info and insert them in the cache without the trusted flag.
 		// The reason for this is that a font might have been installed on the OS in the meantime.
-		for (let i = 0, len = savedFontInfo.length; i < len; i++) {
-			let fontInfo = new FontInfo(savedFontInfo[i], false);
+		for (const savedFontInfo of savedFontInfos) {
+			if (savedFontInfo.version !== SERIALIZED_FONT_INFO_VERSION) {
+				// cannot use older version
+				continue;
+			}
+			const fontInfo = new FontInfo(savedFontInfo, false);
 			this._writeToCache(fontInfo, fontInfo);
 		}
 	}
@@ -172,15 +177,20 @@ class CSSBasedConfiguration extends Disposable {
 				// Hey, it's Bug 14341 ... we couldn't read
 				readConfig = new FontInfo({
 					zoomLevel: browser.getZoomLevel(),
+					pixelRatio: browser.getPixelRatio(),
 					fontFamily: readConfig.fontFamily,
 					fontWeight: readConfig.fontWeight,
 					fontSize: readConfig.fontSize,
+					fontFeatureSettings: readConfig.fontFeatureSettings,
 					lineHeight: readConfig.lineHeight,
 					letterSpacing: readConfig.letterSpacing,
 					isMonospace: readConfig.isMonospace,
 					typicalHalfwidthCharacterWidth: Math.max(readConfig.typicalHalfwidthCharacterWidth, 5),
 					typicalFullwidthCharacterWidth: Math.max(readConfig.typicalFullwidthCharacterWidth, 5),
+					canUseHalfwidthRightwardsArrow: readConfig.canUseHalfwidthRightwardsArrow,
 					spaceWidth: Math.max(readConfig.spaceWidth, 5),
+					middotWidth: Math.max(readConfig.middotWidth, 5),
+					wsmiddotWidth: Math.max(readConfig.wsmiddotWidth, 5),
 					maxDigitWidth: Math.max(readConfig.maxDigitWidth, 5),
 				}, false);
 			}
@@ -190,8 +200,8 @@ class CSSBasedConfiguration extends Disposable {
 		return this._cache.get(bareFontInfo);
 	}
 
-	private static createRequest(chr: string, type: CharWidthRequestType, all: CharWidthRequest[], monospace: CharWidthRequest[]): CharWidthRequest {
-		let result = new CharWidthRequest(chr, type);
+	private static createRequest(chr: string, type: CharWidthRequestType, all: CharWidthRequest[], monospace: CharWidthRequest[] | null): CharWidthRequest {
+		const result = new CharWidthRequest(chr, type);
 		all.push(result);
 		if (monospace) {
 			monospace.push(result);
@@ -200,8 +210,8 @@ class CSSBasedConfiguration extends Disposable {
 	}
 
 	private static _actualReadConfiguration(bareFontInfo: BareFontInfo): FontInfo {
-		let all: CharWidthRequest[] = [];
-		let monospace: CharWidthRequest[] = [];
+		const all: CharWidthRequest[] = [];
+		const monospace: CharWidthRequest[] = [];
 
 		const typicalHalfwidthCharacter = this.createRequest('n', CharWidthRequestType.Regular, all, monospace);
 		const typicalFullwidthCharacter = this.createRequest('\uff4d', CharWidthRequestType.Regular, all, null);
@@ -218,8 +228,14 @@ class CSSBasedConfiguration extends Disposable {
 		const digit9 = this.createRequest('9', CharWidthRequestType.Regular, all, monospace);
 
 		// monospace test: used for whitespace rendering
-		this.createRequest('→', CharWidthRequestType.Regular, all, monospace);
-		this.createRequest('·', CharWidthRequestType.Regular, all, monospace);
+		const rightwardsArrow = this.createRequest('→', CharWidthRequestType.Regular, all, monospace);
+		const halfwidthRightwardsArrow = this.createRequest('￫', CharWidthRequestType.Regular, all, null);
+
+		// U+00B7 - MIDDLE DOT
+		const middot = this.createRequest('·', CharWidthRequestType.Regular, all, monospace);
+
+		// U+2E31 - WORD SEPARATOR MIDDLE DOT
+		const wsmiddotWidth = this.createRequest(String.fromCharCode(0x2E31), CharWidthRequestType.Regular, all, null);
 
 		// monospace test: some characters
 		this.createRequest('|', CharWidthRequestType.Regular, all, monospace);
@@ -250,9 +266,9 @@ class CSSBasedConfiguration extends Disposable {
 
 		const maxDigitWidth = Math.max(digit0.width, digit1.width, digit2.width, digit3.width, digit4.width, digit5.width, digit6.width, digit7.width, digit8.width, digit9.width);
 
-		let isMonospace = true;
-		let referenceWidth = monospace[0].width;
-		for (let i = 1, len = monospace.length; i < len; i++) {
+		let isMonospace = (bareFontInfo.fontFeatureSettings === EditorFontLigatures.OFF);
+		const referenceWidth = monospace[0].width;
+		for (let i = 1, len = monospace.length; isMonospace && i < len; i++) {
 			const diff = referenceWidth - monospace[i].width;
 			if (diff < -0.001 || diff > 0.001) {
 				isMonospace = false;
@@ -260,19 +276,34 @@ class CSSBasedConfiguration extends Disposable {
 			}
 		}
 
+		let canUseHalfwidthRightwardsArrow = true;
+		if (isMonospace && halfwidthRightwardsArrow.width !== referenceWidth) {
+			// using a halfwidth rightwards arrow would break monospace...
+			canUseHalfwidthRightwardsArrow = false;
+		}
+		if (halfwidthRightwardsArrow.width > rightwardsArrow.width) {
+			// using a halfwidth rightwards arrow would paint a larger arrow than a regular rightwards arrow
+			canUseHalfwidthRightwardsArrow = false;
+		}
+
 		// let's trust the zoom level only 2s after it was changed.
 		const canTrustBrowserZoomLevel = (browser.getTimeSinceLastZoomLevelChanged() > 2000);
 		return new FontInfo({
 			zoomLevel: browser.getZoomLevel(),
+			pixelRatio: browser.getPixelRatio(),
 			fontFamily: bareFontInfo.fontFamily,
 			fontWeight: bareFontInfo.fontWeight,
 			fontSize: bareFontInfo.fontSize,
+			fontFeatureSettings: bareFontInfo.fontFeatureSettings,
 			lineHeight: bareFontInfo.lineHeight,
 			letterSpacing: bareFontInfo.letterSpacing,
 			isMonospace: isMonospace,
 			typicalHalfwidthCharacterWidth: typicalHalfwidthCharacter.width,
 			typicalFullwidthCharacterWidth: typicalFullwidthCharacter.width,
+			canUseHalfwidthRightwardsArrow: canUseHalfwidthRightwardsArrow,
 			spaceWidth: space.width,
+			middotWidth: middot.width,
+			wsmiddotWidth: wsmiddotWidth.width,
 			maxDigitWidth: maxDigitWidth
 		}, canTrustBrowserZoomLevel);
 	}
@@ -281,45 +312,44 @@ class CSSBasedConfiguration extends Disposable {
 export class Configuration extends CommonEditorConfiguration {
 
 	public static applyFontInfoSlow(domNode: HTMLElement, fontInfo: BareFontInfo): void {
-		domNode.style.fontFamily = fontInfo.fontFamily;
+		domNode.style.fontFamily = fontInfo.getMassagedFontFamily();
 		domNode.style.fontWeight = fontInfo.fontWeight;
 		domNode.style.fontSize = fontInfo.fontSize + 'px';
+		domNode.style.fontFeatureSettings = fontInfo.fontFeatureSettings;
 		domNode.style.lineHeight = fontInfo.lineHeight + 'px';
 		domNode.style.letterSpacing = fontInfo.letterSpacing + 'px';
 	}
 
 	public static applyFontInfo(domNode: FastDomNode<HTMLElement>, fontInfo: BareFontInfo): void {
-		domNode.setFontFamily(fontInfo.fontFamily);
+		domNode.setFontFamily(fontInfo.getMassagedFontFamily());
 		domNode.setFontWeight(fontInfo.fontWeight);
 		domNode.setFontSize(fontInfo.fontSize);
+		domNode.setFontFeatureSettings(fontInfo.fontFeatureSettings);
 		domNode.setLineHeight(fontInfo.lineHeight);
 		domNode.setLetterSpacing(fontInfo.letterSpacing);
 	}
 
 	private readonly _elementSizeObserver: ElementSizeObserver;
 
-	constructor(options: IEditorOptions, referenceDomElement: HTMLElement = null) {
-		super(options);
+	constructor(
+		isSimpleWidget: boolean,
+		options: Readonly<IEditorConstructionOptions>,
+		referenceDomElement: HTMLElement | null = null,
+		private readonly accessibilityService: IAccessibilityService
+	) {
+		super(isSimpleWidget, options);
 
-		this._elementSizeObserver = this._register(new ElementSizeObserver(referenceDomElement, () => this._onReferenceDomElementSizeChanged()));
+		this._elementSizeObserver = this._register(new ElementSizeObserver(referenceDomElement, options.dimension, () => this._recomputeOptions()));
 
-		this._register(CSSBasedConfiguration.INSTANCE.onDidChange(() => this._onCSSBasedConfigurationChanged()));
+		this._register(CSSBasedConfiguration.INSTANCE.onDidChange(() => this._recomputeOptions()));
 
-		if (this._validatedOptions.automaticLayout) {
+		if (this._validatedOptions.get(EditorOption.automaticLayout)) {
 			this._elementSizeObserver.startObserving();
 		}
 
 		this._register(browser.onDidChangeZoomLevel(_ => this._recomputeOptions()));
-		this._register(browser.onDidChangeAccessibilitySupport(() => this._recomputeOptions()));
+		this._register(this.accessibilityService.onDidChangeScreenReaderOptimized(() => this._recomputeOptions()));
 
-		this._recomputeOptions();
-	}
-
-	private _onReferenceDomElementSizeChanged(): void {
-		this._recomputeOptions();
-	}
-
-	private _onCSSBasedConfigurationChanged(): void {
 		this._recomputeOptions();
 	}
 
@@ -327,18 +357,19 @@ export class Configuration extends CommonEditorConfiguration {
 		this._elementSizeObserver.observe(dimension);
 	}
 
-	public dispose(): void {
-		super.dispose();
+	public updatePixelRatio(): void {
+		this._recomputeOptions();
 	}
 
-	private _getExtraEditorClassName(): string {
+	private static _getExtraEditorClassName(): string {
 		let extra = '';
-		if (browser.isIE) {
-			extra += 'ie ';
-		} else if (browser.isFirefox) {
-			extra += 'ff ';
-		} else if (browser.isEdge) {
-			extra += 'edge ';
+		if (!browser.isSafari && !browser.isWebkitWebView) {
+			// Use user-select: none in all browsers except Safari and native macOS WebView
+			extra += 'no-user-select ';
+		}
+		if (browser.isSafari) {
+			// See https://github.com/microsoft/vscode/issues/108822
+			extra += 'no-minimap-shadow ';
 		}
 		if (platform.isMacintosh) {
 			extra += 'mac ';
@@ -348,13 +379,17 @@ export class Configuration extends CommonEditorConfiguration {
 
 	protected _getEnvConfiguration(): IEnvConfiguration {
 		return {
-			extraEditorClassName: this._getExtraEditorClassName(),
+			extraEditorClassName: Configuration._getExtraEditorClassName(),
 			outerWidth: this._elementSizeObserver.getWidth(),
 			outerHeight: this._elementSizeObserver.getHeight(),
-			emptySelectionClipboard: browser.isWebKit,
+			emptySelectionClipboard: browser.isWebKit || browser.isFirefox,
 			pixelRatio: browser.getPixelRatio(),
 			zoomLevel: browser.getZoomLevel(),
-			accessibilitySupport: browser.getAccessibilitySupport()
+			accessibilitySupport: (
+				this.accessibilityService.isScreenReaderOptimized()
+					? AccessibilitySupport.Enabled
+					: this.accessibilityService.getAccessibilitySupport()
+			)
 		};
 	}
 

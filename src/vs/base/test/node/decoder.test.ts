@@ -3,22 +3,20 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as assert from 'assert';
-import decoder = require('vs/base/node/decoder');
+import { LineDecoder } from 'vs/base/node/decoder';
 
 suite('Decoder', () => {
 
-	test('decoding', function () {
-		const lineDecoder = new decoder.LineDecoder();
-		let res = lineDecoder.write(new Buffer('hello'));
-		assert.equal(res.length, 0);
+	test('decoding', () => {
+		const lineDecoder = new LineDecoder();
+		let res = lineDecoder.write(Buffer.from('hello'));
+		assert.strictEqual(res.length, 0);
 
-		res = lineDecoder.write(new Buffer('\nworld'));
-		assert.equal(res[0], 'hello');
-		assert.equal(res.length, 1);
+		res = lineDecoder.write(Buffer.from('\nworld'));
+		assert.strictEqual(res[0], 'hello');
+		assert.strictEqual(res.length, 1);
 
-		assert.equal(lineDecoder.end(), 'world');
+		assert.strictEqual(lineDecoder.end(), 'world');
 	});
 });

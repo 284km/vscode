@@ -4,63 +4,176 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { HtmlNode } from 'EmmetNode';
-import { doComplete, isStyleSheet, getEmmetMode, extractAbbreviation } from 'vscode-emmet-helper';
-import { isValidLocationForEmmetAbbreviation } from './abbreviationActions';
-import { getNode, getInnerRange, getMappingForIncludedLanguages, parseDocument, getEmmetConfiguration } from './util';
-
-const allowedMimeTypesInScriptTag = ['text/html', 'text/plain', 'text/x-template'];
+import { Node, Stylesheet } from 'EmmetFlatNode';
+import { isValidLocationForEmmetAbbreviation, getSyntaxFromArgs } from './abbreviationActions';
+import { getEmmetHelper, getMappingForIncludedLanguages, parsePartialStylesheet, getEmmetConfiguration, getEmmetMode, isStyleSheet, getFlatNode, allowedMimeTypesInScriptTag, toLSTextDocument, getHtmlFlatNode } from './util';
+import { Range as LSRange } from 'vscode-languageserver-textdocument';
+import { getRootNode } from './parseDocument';
 
 export class DefaultCompletionItemProvider implements vscode.CompletionItemProvider {
 
-	public provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Thenable<vscode.CompletionList> {
-		const mappedLanguages = getMappingForIncludedLanguages();
-		const emmetConfig = vscode.workspace.getConfiguration('emmet');
+	private lastCompletionType: string | undefined;
 
-		let isSyntaxMapped = mappedLanguages[document.languageId] ? true : false;
-		let excludedLanguages = emmetConfig['excludeLanguages'] ? emmetConfig['excludeLanguages'] : [];
-		let syntax = getEmmetMode((isSyntaxMapped ? mappedLanguages[document.languageId] : document.languageId), excludedLanguages);
-
-		if (document.languageId === 'html' || isStyleSheet(document.languageId)) {
-			// Document can be html/css parsed
-			// Use syntaxHelper to parse file, validate location and update sytnax if needed
-			syntax = this.syntaxHelper(syntax, document, position);
+	public provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, _: vscode.CancellationToken, context: vscode.CompletionContext): Thenable<vscode.CompletionList | undefined> | undefined {
+		const completionResult = this.provideCompletionItemsInternal(document, position, context);
+		if (!completionResult) {
+			this.lastCompletionType = undefined;
+			return;
 		}
 
-		if (!syntax
-			|| ((isSyntaxMapped || syntax === 'jsx')
-				&& emmetConfig['showExpandedAbbreviation'] !== 'always')) {
+		return completionResult.then(completionList => {
+			if (!completionList || !completionList.items.length) {
+				this.lastCompletionType = undefined;
+				return completionList;
+			}
+			const item = completionList.items[0];
+			const expandedText = item.documentation ? item.documentation.toString() : '';
+
+			if (expandedText.startsWith('<')) {
+				this.lastCompletionType = 'html';
+			} else if (expandedText.indexOf(':') > 0 && expandedText.endsWith(';')) {
+				this.lastCompletionType = 'css';
+			} else {
+				this.lastCompletionType = undefined;
+			}
+			return completionList;
+		});
+	}
+
+	private provideCompletionItemsInternal(document: vscode.TextDocument, position: vscode.Position, context: vscode.CompletionContext): Thenable<vscode.CompletionList | undefined> | undefined {
+		const emmetConfig = vscode.workspace.getConfiguration('emmet');
+		const excludedLanguages = emmetConfig['excludeLanguages'] ? emmetConfig['excludeLanguages'] : [];
+		if (excludedLanguages.indexOf(document.languageId) > -1) {
+			return;
+		}
+
+		const mappedLanguages = getMappingForIncludedLanguages();
+		const isSyntaxMapped = mappedLanguages[document.languageId] ? true : false;
+		let emmetMode = getEmmetMode((isSyntaxMapped ? mappedLanguages[document.languageId] : document.languageId), excludedLanguages);
+
+		if (!emmetMode
+			|| emmetConfig['showExpandedAbbreviation'] === 'never'
+			|| ((isSyntaxMapped || emmetMode === 'jsx') && emmetConfig['showExpandedAbbreviation'] !== 'always')) {
+			return;
+		}
+
+		let syntax = emmetMode;
+
+		const helper = getEmmetHelper();
+		let validateLocation = syntax === 'html' || syntax === 'jsx' || syntax === 'xml';
+		let rootNode: Node | undefined;
+		let currentNode: Node | undefined;
+
+		const lsDoc = toLSTextDocument(document);
+		position = document.validatePosition(position);
+
+		if (document.languageId === 'html') {
+			if (context.triggerKind === vscode.CompletionTriggerKind.TriggerForIncompleteCompletions) {
+				switch (this.lastCompletionType) {
+					case 'html':
+						validateLocation = false;
+						break;
+					case 'css':
+						validateLocation = false;
+						syntax = 'css';
+						break;
+					default:
+						break;
+				}
+			}
+			if (validateLocation) {
+				const positionOffset = document.offsetAt(position);
+				const emmetRootNode = getRootNode(document, true);
+				const foundNode = getHtmlFlatNode(document.getText(), emmetRootNode, positionOffset, false);
+				if (foundNode) {
+					if (foundNode.name === 'script') {
+						const typeNode = foundNode.attributes.find(attr => attr.name.toString() === 'type');
+						if (typeNode) {
+							const typeAttrValue = typeNode.value.toString();
+							if (typeAttrValue === 'application/javascript' || typeAttrValue === 'text/javascript') {
+								if (!getSyntaxFromArgs({ language: 'javascript' })) {
+									return;
+								} else {
+									validateLocation = false;
+								}
+							}
+							else if (allowedMimeTypesInScriptTag.includes(typeAttrValue)) {
+								validateLocation = false;
+							}
+						} else {
+							return;
+						}
+					}
+					else if (foundNode.name === 'style') {
+						syntax = 'css';
+						validateLocation = false;
+					} else {
+						const styleNode = foundNode.attributes.find(attr => attr.name.toString() === 'style');
+						if (styleNode && styleNode.value.start <= positionOffset && positionOffset <= styleNode.value.end) {
+							syntax = 'css';
+							validateLocation = false;
+						}
+					}
+				}
+			}
+		}
+
+		const expandOptions = isStyleSheet(syntax) ?
+			{ lookAhead: false, syntax: 'stylesheet' } :
+			{ lookAhead: true, syntax: 'markup' };
+		const extractAbbreviationResults = helper.extractAbbreviation(lsDoc, position, expandOptions);
+		if (!extractAbbreviationResults || !helper.isAbbreviationValid(syntax, extractAbbreviationResults.abbreviation)) {
+			return;
+		}
+
+		const offset = document.offsetAt(position);
+		if (isStyleSheet(document.languageId) && context.triggerKind !== vscode.CompletionTriggerKind.TriggerForIncompleteCompletions) {
+			validateLocation = true;
+			let usePartialParsing = vscode.workspace.getConfiguration('emmet')['optimizeStylesheetParsing'] === true;
+			rootNode = usePartialParsing && document.lineCount > 1000 ? parsePartialStylesheet(document, position) : <Stylesheet>getRootNode(document, true);
+			if (!rootNode) {
+				return;
+			}
+			currentNode = getFlatNode(rootNode, offset, true);
+		}
+
+		if (validateLocation && !isValidLocationForEmmetAbbreviation(document, rootNode, currentNode, syntax, offset, toRange(extractAbbreviationResults.abbreviationRange))) {
 			return;
 		}
 
 		let noiseCheckPromise: Thenable<any> = Promise.resolve();
 
-		// Fix for https://github.com/Microsoft/vscode/issues/32647
+		// Fix for https://github.com/microsoft/vscode/issues/32647
 		// Check for document symbols in js/ts/jsx/tsx and avoid triggering emmet for abbreviations of the form symbolName.sometext
 		// Presence of > or * or + in the abbreviation denotes valid abbreviation that should trigger emmet
 		if (!isStyleSheet(syntax) && (document.languageId === 'javascript' || document.languageId === 'javascriptreact' || document.languageId === 'typescript' || document.languageId === 'typescriptreact')) {
-			let extractAbbreviationResults = extractAbbreviation(document, position);
-			if (extractAbbreviationResults) {
-				let abbreviation: string = extractAbbreviationResults.abbreviation;
-				if (abbreviation.startsWith('this.')) {
-					noiseCheckPromise = Promise.resolve(true);
-				} else {
-					noiseCheckPromise = vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', document.uri).then((symbols: vscode.SymbolInformation[]) => {
-						return symbols.find(x => abbreviation === x.name || (abbreviation.startsWith(x.name + '.') && !/>|\*|\+/.test(abbreviation)));
-					});
-				}
+			let abbreviation: string = extractAbbreviationResults.abbreviation;
+			if (abbreviation.startsWith('this.')) {
+				noiseCheckPromise = Promise.resolve(true);
+			} else {
+				noiseCheckPromise = vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeDocumentSymbolProvider', document.uri).then((symbols: vscode.SymbolInformation[] | undefined) => {
+					return symbols && symbols.find(x => abbreviation === x.name || (abbreviation.startsWith(x.name + '.') && !/>|\*|\+/.test(abbreviation)));
+				});
 			}
 		}
 
-		return noiseCheckPromise.then(noise => {
+		return noiseCheckPromise.then((noise): vscode.CompletionList | undefined => {
 			if (noise) {
 				return;
 			}
 
-			let result = doComplete(document, position, syntax, getEmmetConfiguration(syntax));
+			let result = helper.doComplete(toLSTextDocument(document), position, syntax, getEmmetConfiguration(syntax!));
+
+			// https://github.com/microsoft/vscode/issues/86941
+			if (result && result.items && result.items.length === 1) {
+				if (result.items[0].label === 'widows: ;') {
+					return undefined;
+				}
+			}
+
 			let newItems: vscode.CompletionItem[] = [];
 			if (result && result.items) {
-				result.items.forEach(item => {
+				result.items.forEach((item: any) => {
 					let newItem = new vscode.CompletionItem(item.label);
 					newItem.documentation = item.documentation;
 					newItem.detail = item.detail;
@@ -78,52 +191,11 @@ export class DefaultCompletionItemProvider implements vscode.CompletionItemProvi
 				});
 			}
 
-			return Promise.resolve(new vscode.CompletionList(newItems, true));
+			return new vscode.CompletionList(newItems, true);
 		});
 	}
+}
 
-	/**
-	 * Parses given document to check whether given position is valid for emmet abbreviation and returns appropriate syntax
-	 * @param syntax string language mode of current document
-	 * @param document vscode.Textdocument
-	 * @param position vscode.Position position of the abbreviation that needs to be expanded
-	 */
-	private syntaxHelper(syntax: string, document: vscode.TextDocument, position: vscode.Position): string {
-		if (!syntax) {
-			return syntax;
-		}
-		let rootNode = parseDocument(document, false);
-		if (!rootNode) {
-			return;
-		}
-
-		let currentNode = getNode(rootNode, position, true);
-
-		if (!isStyleSheet(syntax)) {
-			const currentHtmlNode = <HtmlNode>currentNode;
-			if (currentHtmlNode
-				&& currentHtmlNode.close
-				&& getInnerRange(currentHtmlNode).contains(position)) {
-				if (currentHtmlNode.name === 'style') {
-					return 'css';
-				}
-				if (currentHtmlNode.name === 'script') {
-					if (currentHtmlNode.attributes
-						&& currentHtmlNode.attributes.some(x => x.name.toString() === 'type' && allowedMimeTypesInScriptTag.indexOf(x.value.toString()) > -1)) {
-						return syntax;
-					}
-					return;
-				}
-			}
-		}
-
-		if (!isValidLocationForEmmetAbbreviation(currentNode, syntax, position)) {
-			return;
-		}
-		return syntax;
-	}
-
-
-
-
+function toRange(lsRange: LSRange) {
+	return new vscode.Range(lsRange.start.line, lsRange.start.character, lsRange.end.line, lsRange.end.character);
 }

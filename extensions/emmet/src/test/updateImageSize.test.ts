@@ -3,29 +3,28 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import 'mocha';
 import * as assert from 'assert';
 import { Selection } from 'vscode';
 import { withRandomFileEditor, closeAllEditors } from './testUtils';
 import { updateImageSize } from '../updateImageSize';
-import * as path from 'path';
 
 suite('Tests for Emmet actions on html tags', () => {
 	teardown(closeAllEditors);
-	const filePath = path.join(__dirname, '../../../../resources/linux/code.png');
 
 	test('update image css with multiple cursors in css file', () => {
 		const cssContents = `
 		.one {
 			margin: 10px;
 			padding: 10px;
-			background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
+			background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
 		}
 		.two {
-			background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
+			background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
 			height: 42px;
 		}
 		.three {
-			background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
+			background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
 			width: 42px;
 		}
 	`;
@@ -33,19 +32,19 @@ suite('Tests for Emmet actions on html tags', () => {
 		.one {
 			margin: 10px;
 			padding: 10px;
-			background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
-			width: 32px;
-			height: 32px;
+			background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
+			width: 1024px;
+			height: 1024px;
 		}
 		.two {
-			background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
-			width: 32px;
-			height: 32px;
+			background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
+			width: 1024px;
+			height: 1024px;
 		}
 		.three {
-			background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
-			height: 32px;
-			width: 32px;
+			background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
+			height: 1024px;
+			width: 1024px;
 		}
 	`;
 		return withRandomFileEditor(cssContents, 'css', (editor, doc) => {
@@ -55,7 +54,7 @@ suite('Tests for Emmet actions on html tags', () => {
 				new Selection(11, 50, 11, 50)
 			];
 
-			return updateImageSize().then(() => {
+			return updateImageSize()!.then(() => {
 				assert.equal(doc.getText(), expectedContents);
 				return Promise.resolve();
 			});
@@ -69,14 +68,14 @@ suite('Tests for Emmet actions on html tags', () => {
 				.one {
 					margin: 10px;
 					padding: 10px;
-					background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
+					background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
 				}
 				.two {
-					background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
+					background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
 					height: 42px;
 				}
 				.three {
-					background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
+					background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
 					width: 42px;
 				}
 			</style>
@@ -88,19 +87,19 @@ suite('Tests for Emmet actions on html tags', () => {
 				.one {
 					margin: 10px;
 					padding: 10px;
-					background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
-					width: 32px;
-					height: 32px;
+					background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
+					width: 1024px;
+					height: 1024px;
 				}
 				.two {
-					background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
-					width: 32px;
-					height: 32px;
+					background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
+					width: 1024px;
+					height: 1024px;
 				}
 				.three {
-					background-image: url(https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png);
-					height: 32px;
-					width: 32px;
+					background-image: url(https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png);
+					height: 1024px;
+					width: 1024px;
 				}
 			</style>
 		</html>
@@ -112,7 +111,7 @@ suite('Tests for Emmet actions on html tags', () => {
 				new Selection(13, 50, 13, 50)
 			];
 
-			return updateImageSize().then(() => {
+			return updateImageSize()!.then(() => {
 				assert.equal(doc.getText(), expectedContents);
 				return Promise.resolve();
 			});
@@ -122,16 +121,16 @@ suite('Tests for Emmet actions on html tags', () => {
 	test('update image size in img tag in html file with multiple cursors', () => {
 		const htmlwithimgtag = `
 		<html>
-			<img id="one" src="https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png" />
-			<img id="two" src="https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png" width="56" />
-			<img id="three" src="https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png" height="56" />
+			<img id="one" src="https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png" />
+			<img id="two" src="https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png" width="56" />
+			<img id="three" src="https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png" height="56" />
 		</html>
 	`;
 		const expectedContents = `
 		<html>
-			<img id="one" src="https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png" width="32" height="32" />
-			<img id="two" src="https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png" width="32" height="32" />
-			<img id="three" src="https://github.com/Microsoft/vscode/blob/master/resources/linux/code.png" height="32" width="32" />
+			<img id="one" src="https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png" width="1024" height="1024" />
+			<img id="two" src="https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png" width="1024" height="1024" />
+			<img id="three" src="https://raw.githubusercontent.com/microsoft/vscode/master/resources/linux/code.png" height="1024" width="1024" />
 		</html>
 	`;
 		return withRandomFileEditor(htmlwithimgtag, 'html', (editor, doc) => {
@@ -141,11 +140,10 @@ suite('Tests for Emmet actions on html tags', () => {
 				new Selection(4, 50, 4, 50)
 			];
 
-			return updateImageSize().then(() => {
+			return updateImageSize()!.then(() => {
 				assert.equal(doc.getText(), expectedContents);
 				return Promise.resolve();
 			});
 		});
 	});
-
 });

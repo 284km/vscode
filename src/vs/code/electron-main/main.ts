@@ -3,215 +3,529 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import { app } from 'electron';
-import { assign } from 'vs/base/common/objects';
-import * as platform from 'vs/base/common/platform';
-import { parseMainProcessArgv } from 'vs/platform/environment/node/argv';
-import { mkdirp } from 'vs/base/node/pfs';
-import { validatePaths } from 'vs/code/node/paths';
-import { LifecycleService, ILifecycleService } from 'vs/platform/lifecycle/electron-main/lifecycleMain';
-import { Server, serve, connect } from 'vs/base/parts/ipc/node/ipc.net';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { ILaunchChannel, LaunchChannelClient } from './launch';
+import 'vs/platform/update/common/update.config.contribution';
+import { app, dialog } from 'electron';
+import { promises, unlinkSync } from 'fs';
+import { localize } from 'vs/nls';
+import { isWindows, IProcessEnvironment, isMacintosh } from 'vs/base/common/platform';
+import product from 'vs/platform/product/common/product';
+import { parseMainProcessArgv, addArg } from 'vs/platform/environment/node/argvHelper';
+import { createWaitMarkerFile } from 'vs/platform/environment/node/wait';
+import { LifecycleMainService, ILifecycleMainService } from 'vs/platform/lifecycle/electron-main/lifecycleMainService';
+import { ProxyChannel } from 'vs/base/parts/ipc/common/ipc';
+import { Server as NodeIPCServer, serve as nodeIPCServe, connect as nodeIPCConnect, XDG_RUNTIME_DIR } from 'vs/base/parts/ipc/node/ipc.net';
+import { Client as NodeIPCClient } from 'vs/base/parts/ipc/common/ipc.net';
+import { ILaunchMainService } from 'vs/platform/launch/electron-main/launchMainService';
 import { ServicesAccessor, IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { InstantiationService } from 'vs/platform/instantiation/common/instantiationService';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
 import { SyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
-import { ILogService, LogMainService } from 'vs/platform/log/common/log';
-import { IStorageService, StorageService } from 'vs/platform/storage/node/storage';
-import { IBackupMainService } from 'vs/platform/backup/common/backup';
-import { BackupMainService } from 'vs/platform/backup/electron-main/backupMainService';
-import { IEnvironmentService, ParsedArgs } from 'vs/platform/environment/common/environment';
-import { EnvironmentService } from 'vs/platform/environment/node/environmentService';
+import { ILogService, ConsoleMainLogger, MultiplexLogService, getLogLevel, ILoggerService } from 'vs/platform/log/common/log';
+import { StateService } from 'vs/platform/state/node/stateService';
+import { IStateService } from 'vs/platform/state/node/state';
+import { IEnvironmentService } from 'vs/platform/environment/common/environment';
+import { NativeParsedArgs } from 'vs/platform/environment/common/argv';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
-import { ConfigurationService } from 'vs/platform/configuration/node/configurationService';
-import { IRequestService } from 'vs/platform/request/node/request';
-import { RequestService } from 'vs/platform/request/electron-main/requestService';
-import { IURLService } from 'vs/platform/url/common/url';
-import { URLService } from 'vs/platform/url/electron-main/urlService';
-import * as fs from 'original-fs';
+import { ConfigurationService } from 'vs/platform/configuration/common/configurationService';
+import { IRequestService } from 'vs/platform/request/common/request';
+import { RequestMainService } from 'vs/platform/request/electron-main/requestMainService';
 import { CodeApplication } from 'vs/code/electron-main/app';
-import { HistoryMainService } from 'vs/platform/history/electron-main/historyMainService';
-import { IHistoryMainService } from 'vs/platform/history/common/history';
-import { WorkspacesMainService } from 'vs/platform/workspaces/electron-main/workspacesMainService';
-import { IWorkspacesMainService } from 'vs/platform/workspaces/common/workspaces';
+import { getPathLabel, mnemonicButtonLabel } from 'vs/base/common/labels';
+import { SpdLogLogger } from 'vs/platform/log/node/spdlogLog';
+import { BufferLogService } from 'vs/platform/log/common/bufferLog';
+import { ExpectedError, setUnexpectedErrorHandler } from 'vs/base/common/errors';
+import { IThemeMainService, ThemeMainService } from 'vs/platform/theme/electron-main/themeMainService';
+import { once } from 'vs/base/common/functional';
+import { ISignService } from 'vs/platform/sign/common/sign';
+import { SignService } from 'vs/platform/sign/node/signService';
+import { DiagnosticsService } from 'vs/platform/diagnostics/node/diagnosticsService';
+import { FileService } from 'vs/platform/files/common/fileService';
+import { DiskFileSystemProvider } from 'vs/platform/files/node/diskFileSystemProvider';
+import { Schemas } from 'vs/base/common/network';
+import { IFileService } from 'vs/platform/files/common/files';
+import { ITunnelService } from 'vs/platform/remote/common/tunnel';
+import { TunnelService } from 'vs/platform/remote/node/tunnelService';
+import { IProductService } from 'vs/platform/product/common/productService';
+import { IPathWithLineAndColumn, isValidBasename, parseLineAndColumnAware, sanitizeFilePath } from 'vs/base/common/extpath';
+import { rtrim, trim } from 'vs/base/common/strings';
+import { basename, join, resolve } from 'vs/base/common/path';
+import { coalesce, distinct } from 'vs/base/common/arrays';
+import { EnvironmentMainService, IEnvironmentMainService } from 'vs/platform/environment/electron-main/environmentMainService';
+import { toErrorMessage } from 'vs/base/common/errorMessage';
+import { NullTelemetryService } from 'vs/platform/telemetry/common/telemetryUtils';
+import { LoggerService } from 'vs/platform/log/node/loggerService';
 
-function createServices(args: ParsedArgs): IInstantiationService {
-	const services = new ServiceCollection();
+/**
+ * The main VS Code entry point.
+ *
+ * Note: This class can exist more than once for example when VS Code is already
+ * running and a second instance is started from the command line. It will always
+ * try to communicate with an existing instance to prevent that 2 VS Code instances
+ * are running at the same time.
+ */
+class CodeMain {
 
-	services.set(IEnvironmentService, new SyncDescriptor(EnvironmentService, args, process.execPath));
-	services.set(ILogService, new SyncDescriptor(LogMainService));
-	services.set(IWorkspacesMainService, new SyncDescriptor(WorkspacesMainService));
-	services.set(IHistoryMainService, new SyncDescriptor(HistoryMainService));
-	services.set(ILifecycleService, new SyncDescriptor(LifecycleService));
-	services.set(IStorageService, new SyncDescriptor(StorageService));
-	services.set(IConfigurationService, new SyncDescriptor(ConfigurationService));
-	services.set(IRequestService, new SyncDescriptor(RequestService));
-	services.set(IURLService, new SyncDescriptor(URLService, args['open-url']));
-	services.set(IBackupMainService, new SyncDescriptor(BackupMainService));
-
-	return new InstantiationService(services, true);
-}
-
-function createPaths(environmentService: IEnvironmentService): TPromise<any> {
-	const paths = [
-		environmentService.appSettingsHome,
-		environmentService.extensionsPath,
-		environmentService.nodeCachedDataDir
-	];
-	return TPromise.join(paths.map(p => p && mkdirp(p))) as TPromise<any>;
-}
-
-class ExpectedError extends Error {
-	public readonly isExpected = true;
-}
-
-function setupIPC(accessor: ServicesAccessor): TPromise<Server> {
-	const logService = accessor.get(ILogService);
-	const environmentService = accessor.get(IEnvironmentService);
-
-	function allowSetForegroundWindow(service: LaunchChannelClient): TPromise<void> {
-		let promise = TPromise.as<void>(void 0);
-		if (platform.isWindows) {
-			promise = service.getMainProcessId()
-				.then(processId => {
-					logService.log('Sending some foreground love to the running instance:', processId);
-
-					try {
-						const { allowSetForegroundWindow } = <any>require.__$__nodeRequire('windows-foreground-love');
-						allowSetForegroundWindow(processId);
-					} catch (e) {
-						// noop
-					}
-				});
+	main(): void {
+		try {
+			this.startup();
+		} catch (error) {
+			console.error(error.message);
+			app.exit(1);
 		}
-
-		return promise;
 	}
 
-	function setup(retry: boolean): TPromise<Server> {
-		return serve(environmentService.mainIPCHandle).then(server => {
-			if (platform.isMacintosh) {
-				app.dock.show(); // dock might be hidden at this case due to a retry
+	private async startup(): Promise<void> {
+
+		// Set the error handler early enough so that we are not getting the
+		// default electron error dialog popping up
+		setUnexpectedErrorHandler(err => console.error(err));
+
+		// Resolve command line arguments
+		const args = this.resolveArgs();
+
+		// Create services
+		const [instantiationService, instanceEnvironment, environmentService, configurationService, stateService, bufferLogService] = this.createServices(args);
+
+		try {
+
+			// Init services
+			try {
+				await this.initServices(environmentService, configurationService, stateService);
+			} catch (error) {
+
+				// Show a dialog for errors that can be resolved by the user
+				this.handleStartupDataDirError(environmentService, error);
+
+				throw error;
 			}
 
-			return server;
-		}, err => {
-			if (err.code !== 'EADDRINUSE') {
-				return TPromise.wrapError<Server>(err);
-			}
+			// Startup
+			await instantiationService.invokeFunction(async accessor => {
+				const logService = accessor.get(ILogService);
+				const lifecycleMainService = accessor.get(ILifecycleMainService);
+				const fileService = accessor.get(IFileService);
 
-			// Since we are the second instance, we do not want to show the dock
-			if (platform.isMacintosh) {
-				app.dock.hide();
+				// Create the main IPC server by trying to be the server
+				// If this throws an error it means we are not the first
+				// instance of VS Code running and so we would quit.
+				const mainProcessNodeIpcServer = await this.doStartup(args, logService, environmentService, lifecycleMainService, instantiationService, true);
+
+				// Delay creation of spdlog for perf reasons (https://github.com/microsoft/vscode/issues/72906)
+				bufferLogService.logger = new SpdLogLogger('main', join(environmentService.logsPath, 'main.log'), true, bufferLogService.getLevel());
+
+				// Lifecycle
+				once(lifecycleMainService.onWillShutdown)(() => {
+					fileService.dispose();
+					configurationService.dispose();
+				});
+
+				return instantiationService.createInstance(CodeApplication, mainProcessNodeIpcServer, instanceEnvironment).startup();
+			});
+		} catch (error) {
+			instantiationService.invokeFunction(this.quit, error);
+		}
+	}
+
+	private createServices(args: NativeParsedArgs): [IInstantiationService, IProcessEnvironment, IEnvironmentMainService, ConfigurationService, StateService, BufferLogService] {
+		const services = new ServiceCollection();
+
+		// Environment
+		const environmentService = new EnvironmentMainService(args);
+		const instanceEnvironment = this.patchEnvironment(environmentService); // Patch `process.env` with the instance's environment
+		services.set(IEnvironmentService, environmentService);
+		services.set(IEnvironmentMainService, environmentService);
+
+		// Log: We need to buffer the spdlog logs until we are sure
+		// we are the only instance running, otherwise we'll have concurrent
+		// log file access on Windows (https://github.com/microsoft/vscode/issues/41218)
+		const bufferLogService = new BufferLogService();
+		const logService = new MultiplexLogService([new ConsoleMainLogger(getLogLevel(environmentService)), bufferLogService]);
+		process.once('exit', () => logService.dispose());
+		services.set(ILogService, logService);
+
+		// Files
+		const fileService = new FileService(logService);
+		services.set(IFileService, fileService);
+		const diskFileSystemProvider = new DiskFileSystemProvider(logService);
+		fileService.registerProvider(Schemas.file, diskFileSystemProvider);
+
+		// Logger
+		services.set(ILoggerService, new LoggerService(logService, fileService));
+
+		// Configuration
+		const configurationService = new ConfigurationService(environmentService.settingsResource, fileService);
+		services.set(IConfigurationService, configurationService);
+
+		// Lifecycle
+		services.set(ILifecycleMainService, new SyncDescriptor(LifecycleMainService));
+
+		// State
+		const stateService = new StateService(environmentService, logService);
+		services.set(IStateService, stateService);
+
+		// Request
+		services.set(IRequestService, new SyncDescriptor(RequestMainService));
+
+		// Themes
+		services.set(IThemeMainService, new SyncDescriptor(ThemeMainService));
+
+		// Signing
+		services.set(ISignService, new SyncDescriptor(SignService));
+
+		// Product
+		services.set(IProductService, { _serviceBrand: undefined, ...product });
+
+		// Tunnel
+		services.set(ITunnelService, new SyncDescriptor(TunnelService));
+
+		return [new InstantiationService(services, true), instanceEnvironment, environmentService, configurationService, stateService, bufferLogService];
+	}
+
+	private patchEnvironment(environmentService: IEnvironmentMainService): IProcessEnvironment {
+		const instanceEnvironment: IProcessEnvironment = {
+			VSCODE_IPC_HOOK: environmentService.mainIPCHandle
+		};
+
+		['VSCODE_NLS_CONFIG', 'VSCODE_PORTABLE'].forEach(key => {
+			const value = process.env[key];
+			if (typeof value === 'string') {
+				instanceEnvironment[key] = value;
+			}
+		});
+
+		Object.assign(process.env, instanceEnvironment);
+
+		return instanceEnvironment;
+	}
+
+	private initServices(environmentService: IEnvironmentMainService, configurationService: ConfigurationService, stateService: StateService): Promise<unknown> {
+
+		// Environment service (paths)
+		const environmentServiceInitialization = Promise.all<void | undefined>([
+			environmentService.extensionsPath,
+			environmentService.nodeCachedDataDir,
+			environmentService.logsPath,
+			environmentService.globalStorageHome.fsPath,
+			environmentService.workspaceStorageHome.fsPath,
+			environmentService.backupHome
+		].map(path => path ? promises.mkdir(path, { recursive: true }) : undefined));
+
+		// Configuration service
+		const configurationServiceInitialization = configurationService.initialize();
+
+		// State service
+		const stateServiceInitialization = stateService.init();
+
+		return Promise.all([environmentServiceInitialization, configurationServiceInitialization, stateServiceInitialization]);
+	}
+
+	private async doStartup(args: NativeParsedArgs, logService: ILogService, environmentService: IEnvironmentMainService, lifecycleMainService: ILifecycleMainService, instantiationService: IInstantiationService, retry: boolean): Promise<NodeIPCServer> {
+
+		// Try to setup a server for running. If that succeeds it means
+		// we are the first instance to startup. Otherwise it is likely
+		// that another instance is already running.
+		let mainProcessNodeIpcServer: NodeIPCServer;
+		try {
+			mainProcessNodeIpcServer = await nodeIPCServe(environmentService.mainIPCHandle);
+			once(lifecycleMainService.onWillShutdown)(() => mainProcessNodeIpcServer.dispose());
+		} catch (error) {
+
+			// Handle unexpected errors (the only expected error is EADDRINUSE that
+			// indicates a second instance of Code is running)
+			if (error.code !== 'EADDRINUSE') {
+
+				// Show a dialog for errors that can be resolved by the user
+				this.handleStartupDataDirError(environmentService, error);
+
+				// Any other runtime error is just printed to the console
+				throw error;
 			}
 
 			// there's a running instance, let's connect to it
-			return connect(environmentService.mainIPCHandle, 'main').then(
-				client => {
+			let client: NodeIPCClient<string>;
+			try {
+				client = await nodeIPCConnect(environmentService.mainIPCHandle, 'main');
+			} catch (error) {
 
-					// Tests from CLI require to be the only instance currently
-					if (environmentService.extensionTestsPath && !environmentService.debugExtensionHost.break) {
-						const msg = 'Running extension tests from the command line is currently only supported if no other instance of Code is running.';
-						logService.error(msg);
-						client.dispose();
-
-						return TPromise.wrapError<Server>(new Error(msg));
+				// Handle unexpected connection errors by showing a dialog to the user
+				if (!retry || isWindows || error.code !== 'ECONNREFUSED') {
+					if (error.code === 'EPERM') {
+						this.showStartupWarningDialog(
+							localize('secondInstanceAdmin', "A second instance of {0} is already running as administrator.", product.nameShort),
+							localize('secondInstanceAdminDetail', "Please close the other instance and try again.")
+						);
 					}
 
-					logService.log('Sending env to running instance...');
-
-					const channel = client.getChannel<ILaunchChannel>('launch');
-					const service = new LaunchChannelClient(channel);
-
-					return allowSetForegroundWindow(service)
-						.then(() => service.start(environmentService.args, process.env))
-						.then(() => client.dispose())
-						.then(() => TPromise.wrapError(new ExpectedError('Sent env to running instance. Terminating...')));
-				},
-				err => {
-					if (!retry || platform.isWindows || err.code !== 'ECONNREFUSED') {
-						return TPromise.wrapError<Server>(err);
-					}
-
-					// it happens on Linux and OS X that the pipe is left behind
-					// let's delete it, since we can't connect to it
-					// and then retry the whole thing
-					try {
-						fs.unlinkSync(environmentService.mainIPCHandle);
-					} catch (e) {
-						logService.log('Fatal error deleting obsolete instance handle', e);
-						return TPromise.wrapError<Server>(e);
-					}
-
-					return setup(false);
+					throw error;
 				}
+
+				// it happens on Linux and OS X that the pipe is left behind
+				// let's delete it, since we can't connect to it and then
+				// retry the whole thing
+				try {
+					unlinkSync(environmentService.mainIPCHandle);
+				} catch (error) {
+					logService.warn('Could not delete obsolete instance handle', error);
+
+					throw error;
+				}
+
+				return this.doStartup(args, logService, environmentService, lifecycleMainService, instantiationService, false);
+			}
+
+			// Tests from CLI require to be the only instance currently
+			if (environmentService.extensionTestsLocationURI && !environmentService.debugExtensionHost.break) {
+				const msg = 'Running extension tests from the command line is currently only supported if no other instance of Code is running.';
+				logService.error(msg);
+				client.dispose();
+
+				throw new Error(msg);
+			}
+
+			// Show a warning dialog after some timeout if it takes long to talk to the other instance
+			// Skip this if we are running with --wait where it is expected that we wait for a while.
+			// Also skip when gathering diagnostics (--status) which can take a longer time.
+			let startupWarningDialogHandle: NodeJS.Timeout | undefined = undefined;
+			if (!args.wait && !args.status) {
+				startupWarningDialogHandle = setTimeout(() => {
+					this.showStartupWarningDialog(
+						localize('secondInstanceNoResponse', "Another instance of {0} is running but not responding", product.nameShort),
+						localize('secondInstanceNoResponseDetail', "Please close all other instances and try again.")
+					);
+				}, 10000);
+			}
+
+			const launchService = ProxyChannel.toService<ILaunchMainService>(client.getChannel('launch'), { disableMarshalling: true });
+
+			// Process Info
+			if (args.status) {
+				return instantiationService.invokeFunction(async () => {
+					const diagnosticsService = new DiagnosticsService(NullTelemetryService);
+					const mainProcessInfo = await launchService.getMainProcessInfo();
+					const remoteDiagnostics = await launchService.getRemoteDiagnostics({ includeProcesses: true, includeWorkspaceMetadata: true });
+					const diagnostics = await diagnosticsService.getDiagnostics(mainProcessInfo, remoteDiagnostics);
+					console.log(diagnostics);
+
+					throw new ExpectedError();
+				});
+			}
+
+			// Windows: allow to set foreground
+			if (isWindows) {
+				await this.windowsAllowSetForegroundWindow(launchService, logService);
+			}
+
+			// Send environment over...
+			logService.trace('Sending env to running instance...');
+			await launchService.start(args, process.env as IProcessEnvironment);
+
+			// Cleanup
+			client.dispose();
+
+			// Now that we started, make sure the warning dialog is prevented
+			if (startupWarningDialogHandle) {
+				clearTimeout(startupWarningDialogHandle);
+			}
+
+			throw new ExpectedError('Sent env to running instance. Terminating...');
+		}
+
+		// Print --status usage info
+		if (args.status) {
+			logService.warn('Warning: The --status argument can only be used if Code is already running. Please run it again after Code has started.');
+
+			throw new ExpectedError('Terminating...');
+		}
+
+		// Set the VSCODE_PID variable here when we are sure we are the first
+		// instance to startup. Otherwise we would wrongly overwrite the PID
+		process.env['VSCODE_PID'] = String(process.pid);
+
+		return mainProcessNodeIpcServer;
+	}
+
+	private handleStartupDataDirError(environmentService: IEnvironmentMainService, error: NodeJS.ErrnoException): void {
+		if (error.code === 'EACCES' || error.code === 'EPERM') {
+			const directories = coalesce([environmentService.userDataPath, environmentService.extensionsPath, XDG_RUNTIME_DIR]).map(folder => getPathLabel(folder, environmentService));
+
+			this.showStartupWarningDialog(
+				localize('startupDataDirError', "Unable to write program user data."),
+				localize('startupUserDataAndExtensionsDirErrorDetail', "{0}\n\nPlease make sure the following directories are writeable:\n\n{1}", toErrorMessage(error), directories.join('\n'))
 			);
+		}
+	}
+
+	private showStartupWarningDialog(message: string, detail: string): void {
+		// use sync variant here because we likely exit after this method
+		// due to startup issues and otherwise the dialog seems to disappear
+		// https://github.com/microsoft/vscode/issues/104493
+		dialog.showMessageBoxSync({
+			title: product.nameLong,
+			type: 'warning',
+			buttons: [mnemonicButtonLabel(localize({ key: 'close', comment: ['&& denotes a mnemonic'] }, "&&Close"))],
+			message,
+			detail,
+			noLink: true
 		});
 	}
 
-	return setup(true);
-}
+	private async windowsAllowSetForegroundWindow(launchService: ILaunchMainService, logService: ILogService): Promise<void> {
+		if (isWindows) {
+			const processId = await launchService.getMainProcessId();
 
-function quit(accessor: ServicesAccessor, reason?: ExpectedError | Error): void {
-	const logService = accessor.get(ILogService);
-	const lifecycleService = accessor.get(ILifecycleService);
+			logService.trace('Sending some foreground love to the running instance:', processId);
 
-	let exitCode = 0;
-
-	if (reason) {
-		if ((reason as ExpectedError).isExpected) {
-			logService.log(reason.message);
-		} else {
-			exitCode = 1; // signal error to the outside
-
-			if (reason.stack) {
-				console.error(reason.stack);
-			} else {
-				console.error(`Startup error: ${reason.toString()}`);
+			try {
+				(await import('windows-foreground-love')).allowSetForegroundWindow(processId);
+			} catch (error) {
+				logService.error(error);
 			}
 		}
 	}
 
-	lifecycleService.kill(exitCode);
-}
+	private quit(accessor: ServicesAccessor, reason?: ExpectedError | Error): void {
+		const logService = accessor.get(ILogService);
+		const lifecycleMainService = accessor.get(ILifecycleMainService);
 
-function main() {
-	let args: ParsedArgs;
+		let exitCode = 0;
 
-	try {
-		args = parseMainProcessArgv(process.argv);
-		args = validatePaths(args);
-	} catch (err) {
-		console.error(err.message);
-		app.exit(1);
+		if (reason) {
+			if ((reason as ExpectedError).isExpected) {
+				if (reason.message) {
+					logService.trace(reason.message);
+				}
+			} else {
+				exitCode = 1; // signal error to the outside
 
-		return;
+				if (reason.stack) {
+					logService.error(reason.stack);
+				} else {
+					logService.error(`Startup error: ${reason.toString()}`);
+				}
+			}
+		}
+
+		lifecycleMainService.kill(exitCode);
 	}
 
-	const instantiationService = createServices(args);
+	//#region Command line arguments utilities
 
-	return instantiationService.invokeFunction(accessor => {
+	private resolveArgs(): NativeParsedArgs {
 
-		// Patch `process.env` with the instance's environment
-		const environmentService = accessor.get(IEnvironmentService);
-		const instanceEnv: typeof process.env = {
-			VSCODE_PID: String(process.pid),
-			VSCODE_IPC_HOOK: environmentService.mainIPCHandle,
-			VSCODE_NLS_CONFIG: process.env['VSCODE_NLS_CONFIG']
-		};
-		assign(process.env, instanceEnv);
+		// Parse arguments
+		const args = this.validatePaths(parseMainProcessArgv(process.argv));
 
-		// Startup
-		return instantiationService.invokeFunction(a => createPaths(a.get(IEnvironmentService)))
-			.then(() => instantiationService.invokeFunction(setupIPC))
-			.then(mainIpcServer => {
-				const app = instantiationService.createInstance(CodeApplication, mainIpcServer, instanceEnv);
-				app.startup();
-			});
-	}).done(null, err => instantiationService.invokeFunction(quit, err));
+		// If we are started with --wait create a random temporary file
+		// and pass it over to the starting instance. We can use this file
+		// to wait for it to be deleted to monitor that the edited file
+		// is closed and then exit the waiting process.
+		//
+		// Note: we are not doing this if the wait marker has been already
+		// added as argument. This can happen if Code was started from CLI.
+		if (args.wait && !args.waitMarkerFilePath) {
+			const waitMarkerFilePath = createWaitMarkerFile(args.verbose);
+			if (waitMarkerFilePath) {
+				addArg(process.argv, '--waitMarkerFilePath', waitMarkerFilePath);
+				args.waitMarkerFilePath = waitMarkerFilePath;
+			}
+		}
+
+		return args;
+	}
+
+	private validatePaths(args: NativeParsedArgs): NativeParsedArgs {
+
+		// Track URLs if they're going to be used
+		if (args['open-url']) {
+			args._urls = args._;
+			args._ = [];
+		}
+
+		// Normalize paths and watch out for goto line mode
+		if (!args['remote']) {
+			const paths = this.doValidatePaths(args._, args.goto);
+			args._ = paths;
+		}
+
+		return args;
+	}
+
+	private doValidatePaths(args: string[], gotoLineMode?: boolean): string[] {
+		const cwd = process.env['VSCODE_CWD'] || process.cwd();
+		const result = args.map(arg => {
+			let pathCandidate = String(arg);
+
+			let parsedPath: IPathWithLineAndColumn | undefined = undefined;
+			if (gotoLineMode) {
+				parsedPath = parseLineAndColumnAware(pathCandidate);
+				pathCandidate = parsedPath.path;
+			}
+
+			if (pathCandidate) {
+				pathCandidate = this.preparePath(cwd, pathCandidate);
+			}
+
+			const sanitizedFilePath = sanitizeFilePath(pathCandidate, cwd);
+
+			const filePathBasename = basename(sanitizedFilePath);
+			if (filePathBasename /* can be empty if code is opened on root */ && !isValidBasename(filePathBasename)) {
+				return null; // do not allow invalid file names
+			}
+
+			if (gotoLineMode && parsedPath) {
+				parsedPath.path = sanitizedFilePath;
+
+				return this.toPath(parsedPath);
+			}
+
+			return sanitizedFilePath;
+		});
+
+		const caseInsensitive = isWindows || isMacintosh;
+		const distinctPaths = distinct(result, path => path && caseInsensitive ? path.toLowerCase() : (path || ''));
+
+		return coalesce(distinctPaths);
+	}
+
+	private preparePath(cwd: string, path: string): string {
+
+		// Trim trailing quotes
+		if (isWindows) {
+			path = rtrim(path, '"'); // https://github.com/microsoft/vscode/issues/1498
+		}
+
+		// Trim whitespaces
+		path = trim(trim(path, ' '), '\t');
+
+		if (isWindows) {
+
+			// Resolve the path against cwd if it is relative
+			path = resolve(cwd, path);
+
+			// Trim trailing '.' chars on Windows to prevent invalid file names
+			path = rtrim(path, '.');
+		}
+
+		return path;
+	}
+
+	private toPath(pathWithLineAndCol: IPathWithLineAndColumn): string {
+		const segments = [pathWithLineAndCol.path];
+
+		if (typeof pathWithLineAndCol.line === 'number') {
+			segments.push(String(pathWithLineAndCol.line));
+		}
+
+		if (typeof pathWithLineAndCol.column === 'number') {
+			segments.push(String(pathWithLineAndCol.column));
+		}
+
+		return segments.join(':');
+	}
+
+	//#endregion
 }
 
-main();
+// Main Startup
+const code = new CodeMain();
+code.main();

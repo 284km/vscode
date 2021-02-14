@@ -2,23 +2,23 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as assert from 'assert';
 import { EditOperation } from 'vs/editor/common/core/editOperation';
 import { Position } from 'vs/editor/common/core/position';
 import { Range } from 'vs/editor/common/core/range';
-import { IModelDeltaDecoration, TrackedRangeStickiness, EndOfLineSequence } from 'vs/editor/common/editorCommon';
-import { Model } from 'vs/editor/common/model/model';
+import { EndOfLineSequence, IModelDeltaDecoration, TrackedRangeStickiness } from 'vs/editor/common/model';
+import { TextModel } from 'vs/editor/common/model/textModel';
+import { createTextModel } from 'vs/editor/test/common/editorTestUtils';
 
 // --------- utils
 
 interface ILightWeightDecoration2 {
 	range: Range;
-	className: string;
+	className: string | null | undefined;
 }
 
-function modelHasDecorations(model: Model, decorations: ILightWeightDecoration2[]) {
+function modelHasDecorations(model: TextModel, decorations: ILightWeightDecoration2[]) {
 	let modelDecorations: ILightWeightDecoration2[] = [];
 	let actualDecorations = model.getAllDecorations();
 	for (let i = 0, len = actualDecorations.length; i < len; i++) {
@@ -28,46 +28,46 @@ function modelHasDecorations(model: Model, decorations: ILightWeightDecoration2[
 		});
 	}
 	modelDecorations.sort((a, b) => Range.compareRangesUsingStarts(a.range, b.range));
-	assert.deepEqual(modelDecorations, decorations);
+	assert.deepStrictEqual(modelDecorations, decorations);
 }
 
-function modelHasDecoration(model: Model, startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, className: string) {
+function modelHasDecoration(model: TextModel, startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, className: string) {
 	modelHasDecorations(model, [{
 		range: new Range(startLineNumber, startColumn, endLineNumber, endColumn),
 		className: className
 	}]);
 }
 
-function modelHasNoDecorations(model: Model) {
-	assert.equal(model.getAllDecorations().length, 0, 'Model has no decoration');
+function modelHasNoDecorations(model: TextModel) {
+	assert.strictEqual(model.getAllDecorations().length, 0, 'Model has no decoration');
 }
 
-function addDecoration(model: Model, startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, className: string): string {
+function addDecoration(model: TextModel, startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, className: string): string {
 	return model.changeDecorations((changeAccessor) => {
 		return changeAccessor.addDecoration(new Range(startLineNumber, startColumn, endLineNumber, endColumn), {
 			className: className
 		});
-	});
+	})!;
 }
 
-function lineHasDecorations(model: Model, lineNumber: number, decorations: { start: number; end: number; className: string; }[]) {
-	var lineDecorations = [];
-	var decs = model.getLineDecorations(lineNumber);
-	for (var i = 0, len = decs.length; i < len; i++) {
+function lineHasDecorations(model: TextModel, lineNumber: number, decorations: { start: number; end: number; className: string; }[]) {
+	let lineDecorations: Array<{ start: number; end: number; className: string | null | undefined; }> = [];
+	let decs = model.getLineDecorations(lineNumber);
+	for (let i = 0, len = decs.length; i < len; i++) {
 		lineDecorations.push({
 			start: decs[i].range.startColumn,
 			end: decs[i].range.endColumn,
 			className: decs[i].options.className
 		});
 	}
-	assert.deepEqual(lineDecorations, decorations, 'Line decorations');
+	assert.deepStrictEqual(lineDecorations, decorations, 'Line decorations');
 }
 
-function lineHasNoDecorations(model: Model, lineNumber: number) {
+function lineHasNoDecorations(model: TextModel, lineNumber: number) {
 	lineHasDecorations(model, lineNumber, []);
 }
 
-function lineHasDecoration(model: Model, lineNumber: number, start: number, end: number, className: string) {
+function lineHasDecoration(model: TextModel, lineNumber: number, start: number, end: number, className: string) {
 	lineHasDecorations(model, lineNumber, [{
 		start: start,
 		end: end,
@@ -76,29 +76,28 @@ function lineHasDecoration(model: Model, lineNumber: number, start: number, end:
 }
 
 suite('Editor Model - Model Decorations', () => {
-	var LINE1 = 'My First Line';
-	var LINE2 = '\t\tMy Second Line';
-	var LINE3 = '    Third Line';
-	var LINE4 = '';
-	var LINE5 = '1';
+	const LINE1 = 'My First Line';
+	const LINE2 = '\t\tMy Second Line';
+	const LINE3 = '    Third Line';
+	const LINE4 = '';
+	const LINE5 = '1';
 
 	// --------- Model Decorations
 
-	var thisModel: Model;
+	let thisModel: TextModel;
 
 	setup(() => {
-		var text =
+		const text =
 			LINE1 + '\r\n' +
 			LINE2 + '\n' +
 			LINE3 + '\n' +
 			LINE4 + '\r\n' +
 			LINE5;
-		thisModel = Model.createFromString(text);
+		thisModel = createTextModel(text);
 	});
 
 	teardown(() => {
 		thisModel.dispose();
-		thisModel = null;
 	});
 
 	test('single character decoration', () => {
@@ -122,13 +121,13 @@ suite('Editor Model - Model Decorations', () => {
 	test('full line decoration', () => {
 		addDecoration(thisModel, 1, 1, 2, 1, 'myType');
 
-		var line1Decorations = thisModel.getLineDecorations(1);
-		assert.equal(line1Decorations.length, 1);
-		assert.equal(line1Decorations[0].options.className, 'myType');
+		let line1Decorations = thisModel.getLineDecorations(1);
+		assert.strictEqual(line1Decorations.length, 1);
+		assert.strictEqual(line1Decorations[0].options.className, 'myType');
 
-		var line2Decorations = thisModel.getLineDecorations(1);
-		assert.equal(line2Decorations.length, 1);
-		assert.equal(line2Decorations[0].options.className, 'myType');
+		let line2Decorations = thisModel.getLineDecorations(1);
+		assert.strictEqual(line2Decorations.length, 1);
+		assert.strictEqual(line2Decorations[0].options.className, 'myType');
 
 		lineHasNoDecorations(thisModel, 3);
 		lineHasNoDecorations(thisModel, 4);
@@ -138,17 +137,17 @@ suite('Editor Model - Model Decorations', () => {
 	test('multiple line decoration', () => {
 		addDecoration(thisModel, 1, 2, 3, 2, 'myType');
 
-		var line1Decorations = thisModel.getLineDecorations(1);
-		assert.equal(line1Decorations.length, 1);
-		assert.equal(line1Decorations[0].options.className, 'myType');
+		let line1Decorations = thisModel.getLineDecorations(1);
+		assert.strictEqual(line1Decorations.length, 1);
+		assert.strictEqual(line1Decorations[0].options.className, 'myType');
 
-		var line2Decorations = thisModel.getLineDecorations(1);
-		assert.equal(line2Decorations.length, 1);
-		assert.equal(line2Decorations[0].options.className, 'myType');
+		let line2Decorations = thisModel.getLineDecorations(1);
+		assert.strictEqual(line2Decorations.length, 1);
+		assert.strictEqual(line2Decorations[0].options.className, 'myType');
 
-		var line3Decorations = thisModel.getLineDecorations(1);
-		assert.equal(line3Decorations.length, 1);
-		assert.equal(line3Decorations[0].options.className, 'myType');
+		let line3Decorations = thisModel.getLineDecorations(1);
+		assert.strictEqual(line3Decorations.length, 1);
+		assert.strictEqual(line3Decorations[0].options.className, 'myType');
 
 		lineHasNoDecorations(thisModel, 4);
 		lineHasNoDecorations(thisModel, 5);
@@ -157,7 +156,7 @@ suite('Editor Model - Model Decorations', () => {
 	// --------- removing, changing decorations
 
 	test('decoration gets removed', () => {
-		var decId = addDecoration(thisModel, 1, 2, 3, 2, 'myType');
+		let decId = addDecoration(thisModel, 1, 2, 3, 2, 'myType');
 		modelHasDecoration(thisModel, 1, 2, 3, 2, 'myType');
 		thisModel.changeDecorations((changeAccessor) => {
 			changeAccessor.removeDecoration(decId);
@@ -166,8 +165,8 @@ suite('Editor Model - Model Decorations', () => {
 	});
 
 	test('decorations get removed', () => {
-		var decId1 = addDecoration(thisModel, 1, 2, 3, 2, 'myType1');
-		var decId2 = addDecoration(thisModel, 1, 2, 3, 1, 'myType2');
+		let decId1 = addDecoration(thisModel, 1, 2, 3, 2, 'myType1');
+		let decId2 = addDecoration(thisModel, 1, 2, 3, 1, 'myType2');
 		modelHasDecorations(thisModel, [
 			{
 				range: new Range(1, 2, 3, 1),
@@ -194,7 +193,7 @@ suite('Editor Model - Model Decorations', () => {
 	});
 
 	test('decoration range can be changed', () => {
-		var decId = addDecoration(thisModel, 1, 2, 3, 2, 'myType');
+		let decId = addDecoration(thisModel, 1, 2, 3, 2, 'myType');
 		modelHasDecoration(thisModel, 1, 2, 3, 2, 'myType');
 		thisModel.changeDecorations((changeAccessor) => {
 			changeAccessor.changeDecoration(decId, new Range(1, 1, 1, 2));
@@ -210,7 +209,7 @@ suite('Editor Model - Model Decorations', () => {
 			listenerCalled++;
 		});
 		addDecoration(thisModel, 1, 2, 3, 2, 'myType');
-		assert.equal(listenerCalled, 1, 'listener called');
+		assert.strictEqual(listenerCalled, 1, 'listener called');
 	});
 
 	test('decorations emit event on change', () => {
@@ -222,7 +221,7 @@ suite('Editor Model - Model Decorations', () => {
 		thisModel.changeDecorations((changeAccessor) => {
 			changeAccessor.changeDecoration(decId, new Range(1, 1, 1, 2));
 		});
-		assert.equal(listenerCalled, 1, 'listener called');
+		assert.strictEqual(listenerCalled, 1, 'listener called');
 	});
 
 	test('decorations emit event on remove', () => {
@@ -234,7 +233,7 @@ suite('Editor Model - Model Decorations', () => {
 		thisModel.changeDecorations((changeAccessor) => {
 			changeAccessor.removeDecoration(decId);
 		});
-		assert.equal(listenerCalled, 1, 'listener called');
+		assert.strictEqual(listenerCalled, 1, 'listener called');
 	});
 
 	test('decorations emit event when inserting one line text before it', () => {
@@ -246,7 +245,7 @@ suite('Editor Model - Model Decorations', () => {
 		});
 
 		thisModel.applyEdits([EditOperation.insert(new Position(1, 1), 'Hallo ')]);
-		assert.equal(listenerCalled, 1, 'listener called');
+		assert.strictEqual(listenerCalled, 1, 'listener called');
 	});
 
 	test('decorations do not emit event on no-op deltaDecorations', () => {
@@ -261,7 +260,7 @@ suite('Editor Model - Model Decorations', () => {
 			accessor.deltaDecorations([], []);
 		});
 
-		assert.equal(listenerCalled, 0, 'listener not called');
+		assert.strictEqual(listenerCalled, 0, 'listener not called');
 	});
 
 	// --------- editing text & effects on decorations
@@ -402,7 +401,7 @@ suite('Editor Model - Model Decorations', () => {
 	});
 
 	test('removeAllDecorationsWithOwnerId can be called after model dispose', () => {
-		let model = Model.createFromString('asd');
+		let model = createTextModel('asd');
 		model.dispose();
 		model.removeAllDecorationsWithOwnerId(1);
 	});
@@ -417,16 +416,20 @@ suite('Editor Model - Model Decorations', () => {
 suite('Decorations and editing', () => {
 
 	function _runTest(decRange: Range, stickiness: TrackedRangeStickiness, editRange: Range, editText: string, editForceMoveMarkers: boolean, expectedDecRange: Range, msg: string): void {
-		let model = Model.createFromString([
+		let model = createTextModel([
 			'My First Line',
 			'My Second Line',
 			'Third Line'
 		].join('\n'));
 
 		const id = model.deltaDecorations([], [{ range: decRange, options: { stickiness: stickiness } }])[0];
-		model.applyEdits([{ range: editRange, text: editText, forceMoveMarkers: editForceMoveMarkers, identifier: null }]);
+		model.applyEdits([{
+			range: editRange,
+			text: editText,
+			forceMoveMarkers: editForceMoveMarkers
+		}]);
 		const actual = model.getDecorationRange(id);
-		assert.deepEqual(actual, expectedDecRange, msg);
+		assert.deepStrictEqual(actual, expectedDecRange, msg);
 
 		model.dispose();
 	}
@@ -1135,39 +1138,37 @@ suite('deltaDecorations', () => {
 		return 1;
 	}
 
-	function readModelDecorations(model: Model, ids: string[]): ILightWeightDecoration[] {
+	function readModelDecorations(model: TextModel, ids: string[]): ILightWeightDecoration[] {
 		return ids.map((id) => {
 			return {
-				range: model.getDecorationRange(id),
-				id: model.getDecorationOptions(id).className
+				range: model.getDecorationRange(id)!,
+				id: model.getDecorationOptions(id)!.className!
 			};
 		});
 	}
 
 	function testDeltaDecorations(text: string[], decorations: ILightWeightDecoration[], newDecorations: ILightWeightDecoration[]): void {
 
-		var model = Model.createFromString(text.join('\n'));
+		let model = createTextModel(text.join('\n'));
 
 		// Add initial decorations & assert they are added
-		var initialIds = model.deltaDecorations([], decorations.map(toModelDeltaDecoration));
-		var actualDecorations = readModelDecorations(model, initialIds);
+		let initialIds = model.deltaDecorations([], decorations.map(toModelDeltaDecoration));
+		let actualDecorations = readModelDecorations(model, initialIds);
 
-		assert.equal(initialIds.length, decorations.length, 'returns expected cnt of ids');
-		assert.equal(initialIds.length, model.getAllDecorations().length, 'does not leak decorations');
-		assert.equal(initialIds.length, model._getTrackedRangesCount(), 'does not leak tracked ranges');
+		assert.strictEqual(initialIds.length, decorations.length, 'returns expected cnt of ids');
+		assert.strictEqual(initialIds.length, model.getAllDecorations().length, 'does not leak decorations');
 		actualDecorations.sort((a, b) => strcmp(a.id, b.id));
 		decorations.sort((a, b) => strcmp(a.id, b.id));
-		assert.deepEqual(actualDecorations, decorations);
+		assert.deepStrictEqual(actualDecorations, decorations);
 
-		var newIds = model.deltaDecorations(initialIds, newDecorations.map(toModelDeltaDecoration));
-		var actualNewDecorations = readModelDecorations(model, newIds);
+		let newIds = model.deltaDecorations(initialIds, newDecorations.map(toModelDeltaDecoration));
+		let actualNewDecorations = readModelDecorations(model, newIds);
 
-		assert.equal(newIds.length, newDecorations.length, 'returns expected cnt of ids');
-		assert.equal(newIds.length, model.getAllDecorations().length, 'does not leak decorations');
-		assert.equal(newIds.length, model._getTrackedRangesCount(), 'does not leak tracked ranges');
+		assert.strictEqual(newIds.length, newDecorations.length, 'returns expected cnt of ids');
+		assert.strictEqual(newIds.length, model.getAllDecorations().length, 'does not leak decorations');
 		actualNewDecorations.sort((a, b) => strcmp(a.id, b.id));
 		newDecorations.sort((a, b) => strcmp(a.id, b.id));
-		assert.deepEqual(actualDecorations, decorations);
+		assert.deepStrictEqual(actualDecorations, decorations);
 
 		model.dispose();
 	}
@@ -1177,18 +1178,18 @@ suite('deltaDecorations', () => {
 	}
 
 	test('result respects input', () => {
-		var model = Model.createFromString([
+		let model = createTextModel([
 			'Hello world,',
 			'How are you?'
 		].join('\n'));
 
-		var ids = model.deltaDecorations([], [
+		let ids = model.deltaDecorations([], [
 			toModelDeltaDecoration(decoration('a', 1, 1, 1, 12)),
 			toModelDeltaDecoration(decoration('b', 2, 1, 2, 13))
 		]);
 
-		assert.deepEqual(model.getDecorationRange(ids[0]), range(1, 1, 1, 12));
-		assert.deepEqual(model.getDecorationRange(ids[1]), range(2, 1, 2, 13));
+		assert.deepStrictEqual(model.getDecorationRange(ids[0]), range(1, 1, 1, 12));
+		assert.deepStrictEqual(model.getDecorationRange(ids[1]), range(2, 1, 2, 13));
 
 		model.dispose();
 	});
@@ -1265,7 +1266,7 @@ suite('deltaDecorations', () => {
 
 	test('issue #4317: editor.setDecorations doesn\'t update the hover message', () => {
 
-		let model = Model.createFromString('Hello world!');
+		let model = createTextModel('Hello world!');
 
 		let ids = model.deltaDecorations([], [{
 			range: {
@@ -1293,18 +1294,18 @@ suite('deltaDecorations', () => {
 
 		let actualDecoration = model.getDecorationOptions(ids[0]);
 
-		assert.deepEqual(actualDecoration.hoverMessage, { value: 'hello2' });
+		assert.deepStrictEqual(actualDecoration!.hoverMessage, { value: 'hello2' });
 
 		model.dispose();
 	});
 
 	test('model doesn\'t get confused with individual tracked ranges', () => {
-		var model = Model.createFromString([
+		let model = createTextModel([
 			'Hello world,',
 			'How are you?'
 		].join('\n'));
 
-		var trackedRangeId = model.changeDecorations((changeAcessor) => {
+		let trackedRangeId = model.changeDecorations((changeAcessor) => {
 			return changeAcessor.addDecoration(
 				{
 					startLineNumber: 1,
@@ -1312,35 +1313,35 @@ suite('deltaDecorations', () => {
 					endLineNumber: 1,
 					endColumn: 1
 				}, {
-					stickiness: TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges
-				}
+				stickiness: TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges
+			}
 			);
 		});
 		model.changeDecorations((changeAccessor) => {
-			changeAccessor.removeDecoration(trackedRangeId);
+			changeAccessor.removeDecoration(trackedRangeId!);
 		});
 
-		var ids = model.deltaDecorations([], [
+		let ids = model.deltaDecorations([], [
 			toModelDeltaDecoration(decoration('a', 1, 1, 1, 12)),
 			toModelDeltaDecoration(decoration('b', 2, 1, 2, 13))
 		]);
 
-		assert.deepEqual(model.getDecorationRange(ids[0]), range(1, 1, 1, 12));
-		assert.deepEqual(model.getDecorationRange(ids[1]), range(2, 1, 2, 13));
+		assert.deepStrictEqual(model.getDecorationRange(ids[0]), range(1, 1, 1, 12));
+		assert.deepStrictEqual(model.getDecorationRange(ids[1]), range(2, 1, 2, 13));
 
 		ids = model.deltaDecorations(ids, [
 			toModelDeltaDecoration(decoration('a', 1, 1, 1, 12)),
 			toModelDeltaDecoration(decoration('b', 2, 1, 2, 13))
 		]);
 
-		assert.deepEqual(model.getDecorationRange(ids[0]), range(1, 1, 1, 12));
-		assert.deepEqual(model.getDecorationRange(ids[1]), range(2, 1, 2, 13));
+		assert.deepStrictEqual(model.getDecorationRange(ids[0]), range(1, 1, 1, 12));
+		assert.deepStrictEqual(model.getDecorationRange(ids[1]), range(2, 1, 2, 13));
 
 		model.dispose();
 	});
 
 	test('issue #16922: Clicking on link doesn\'t seem to do anything', () => {
-		var model = Model.createFromString([
+		let model = createTextModel([
 			'Hello world,',
 			'How are you?',
 			'Fine.',
@@ -1364,7 +1365,25 @@ suite('deltaDecorations', () => {
 
 		let inRangeClassNames = inRange.map(d => d.options.className);
 		inRangeClassNames.sort();
-		assert.deepEqual(inRangeClassNames, ['x1', 'x2', 'x3', 'x4']);
+		assert.deepStrictEqual(inRangeClassNames, ['x1', 'x2', 'x3', 'x4']);
+
+		model.dispose();
+	});
+
+	test('issue #41492: URL highlighting persists after pasting over url', () => {
+
+		let model = createTextModel([
+			'My First Line'
+		].join('\n'));
+
+		const id = model.deltaDecorations([], [{ range: new Range(1, 2, 1, 14), options: { stickiness: TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges, collapseOnReplaceEdit: true } }])[0];
+		model.applyEdits([{
+			range: new Range(1, 1, 1, 14),
+			text: 'Some new text that is longer than the previous one',
+			forceMoveMarkers: false
+		}]);
+		const actual = model.getDecorationRange(id);
+		assert.deepStrictEqual(actual, new Range(1, 1, 1, 1));
 
 		model.dispose();
 	});

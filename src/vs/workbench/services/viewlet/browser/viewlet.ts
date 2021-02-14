@@ -2,50 +2,56 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { TPromise } from 'vs/base/common/winjs.base';
 import { IViewlet } from 'vs/workbench/common/viewlet';
-import { createDecorator, ServiceIdentifier } from 'vs/platform/instantiation/common/instantiation';
-import Event from 'vs/base/common/event';
+import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import { Event } from 'vs/base/common/event';
 import { ViewletDescriptor } from 'vs/workbench/browser/viewlet';
-import { IProgressService } from 'vs/platform/progress/common/progress';
+import { IProgressIndicator } from 'vs/platform/progress/common/progress';
 
 export const IViewletService = createDecorator<IViewletService>('viewletService');
 
 export interface IViewletService {
-	_serviceBrand: ServiceIdentifier<any>;
 
-	onDidViewletOpen: Event<IViewlet>;
-	onDidViewletClose: Event<IViewlet>;
+	readonly _serviceBrand: undefined;
+
+	readonly onDidViewletRegister: Event<ViewletDescriptor>;
+	readonly onDidViewletDeregister: Event<ViewletDescriptor>;
+	readonly onDidViewletOpen: Event<IViewlet>;
+	readonly onDidViewletClose: Event<IViewlet>;
 
 	/**
 	 * Opens a viewlet with the given identifier and pass keyboard focus to it if specified.
 	 */
-	openViewlet(id: string, focus?: boolean): TPromise<IViewlet>;
+	openViewlet(id: string | undefined, focus?: boolean): Promise<IViewlet | undefined>;
 
 	/**
-	 * Returns the current active viewlet or null if none.
+	 * Returns the current active viewlet if any.
 	 */
-	getActiveViewlet(): IViewlet;
-
-	/**
-	 * Returns the id of the default viewlet.
-	 */
-	getDefaultViewletId(): string;
+	getActiveViewlet(): IViewlet | undefined;
 
 	/**
 	 * Returns the viewlet by id.
 	 */
-	getViewlet(id: string): ViewletDescriptor;
+	getViewlet(id: string): ViewletDescriptor | undefined;
 
 	/**
-	 * Returns all registered viewlets
+	 * Returns all enabled viewlets
 	 */
 	getViewlets(): ViewletDescriptor[];
 
 	/**
-	 *
+	 * Returns the progress indicator for the side bar.
 	 */
-	getProgressIndicator(id: string): IProgressService;
+	getProgressIndicator(id: string): IProgressIndicator | undefined;
+
+	/**
+	 * Hide the active viewlet.
+	 */
+	hideActiveViewlet(): void;
+
+	/**
+	 * Return the last active viewlet id.
+	 */
+	getLastActiveViewletId(): string;
 }

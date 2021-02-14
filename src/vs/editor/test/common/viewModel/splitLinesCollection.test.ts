@@ -2,101 +2,102 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as assert from 'assert';
+import { IDisposable } from 'vs/base/common/lifecycle';
+import { IViewLineTokens } from 'vs/editor/common/core/lineTokens';
 import { Position } from 'vs/editor/common/core/position';
-import { CharacterHardWrappingLineMapping, CharacterHardWrappingLineMapperFactory } from 'vs/editor/common/viewModel/characterHardWrappingLineMapper';
-import { PrefixSumComputer } from 'vs/editor/common/viewModel/prefixSumComputer';
-import { ILineMapping, IModel, SplitLine, SplitLinesCollection } from 'vs/editor/common/viewModel/splitLinesCollection';
-import { TestConfiguration } from 'vs/editor/test/common/mocks/testConfiguration';
-import { Model } from 'vs/editor/common/model/model';
-import { toUint32Array } from 'vs/editor/common/core/uint';
+import { IRange, Range } from 'vs/editor/common/core/range';
+import { TokenizationResult2 } from 'vs/editor/common/core/token';
+import { EndOfLinePreference } from 'vs/editor/common/model';
+import { TextModel } from 'vs/editor/common/model/textModel';
 import * as modes from 'vs/editor/common/modes';
 import { NULL_STATE } from 'vs/editor/common/modes/nullMode';
-import { TokenizationResult2 } from 'vs/editor/common/core/token';
-import { IDisposable } from 'vs/base/common/lifecycle';
-import { ViewLineToken } from 'vs/editor/common/core/viewLineToken';
-import { ViewLineData } from 'vs/editor/common/viewModel/viewModel';
-import { Range } from 'vs/editor/common/core/range';
+import { MonospaceLineBreaksComputerFactory } from 'vs/editor/common/viewModel/monospaceLineBreaksComputer';
+import { ISimpleModel, SplitLine, SplitLinesCollection } from 'vs/editor/common/viewModel/splitLinesCollection';
+import { LineBreakData, ViewLineData } from 'vs/editor/common/viewModel/viewModel';
+import { TestConfiguration } from 'vs/editor/test/common/mocks/testConfiguration';
+import { EditorOption } from 'vs/editor/common/config/editorOptions';
+import { createTextModel } from 'vs/editor/test/common/editorTestUtils';
 
 suite('Editor ViewModel - SplitLinesCollection', () => {
 	test('SplitLine', () => {
-		var model1 = createModel('My First LineMy Second LineAnd another one');
-		var line1 = createSplitLine([13, 14, 15], '');
+		let model1 = createModel('My First LineMy Second LineAnd another one');
+		let line1 = createSplitLine([13, 14, 15], [13, 13 + 14, 13 + 14 + 15], 0);
 
-		assert.equal(line1.getViewLineCount(), 3);
-		assert.equal(line1.getViewLineContent(model1, 1, 0), 'My First Line');
-		assert.equal(line1.getViewLineContent(model1, 1, 1), 'My Second Line');
-		assert.equal(line1.getViewLineContent(model1, 1, 2), 'And another one');
-		assert.equal(line1.getViewLineMaxColumn(model1, 1, 0), 14);
-		assert.equal(line1.getViewLineMaxColumn(model1, 1, 1), 15);
-		assert.equal(line1.getViewLineMaxColumn(model1, 1, 2), 16);
-		for (var col = 1; col <= 14; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(0, col), col, 'getInputColumnOfOutputPosition(0, ' + col + ')');
+		assert.strictEqual(line1.getViewLineCount(), 3);
+		assert.strictEqual(line1.getViewLineContent(model1, 1, 0), 'My First Line');
+		assert.strictEqual(line1.getViewLineContent(model1, 1, 1), 'My Second Line');
+		assert.strictEqual(line1.getViewLineContent(model1, 1, 2), 'And another one');
+		assert.strictEqual(line1.getViewLineMaxColumn(model1, 1, 0), 14);
+		assert.strictEqual(line1.getViewLineMaxColumn(model1, 1, 1), 15);
+		assert.strictEqual(line1.getViewLineMaxColumn(model1, 1, 2), 16);
+		for (let col = 1; col <= 14; col++) {
+			assert.strictEqual(line1.getModelColumnOfViewPosition(0, col), col, 'getInputColumnOfOutputPosition(0, ' + col + ')');
 		}
-		for (var col = 1; col <= 15; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(1, col), 13 + col, 'getInputColumnOfOutputPosition(1, ' + col + ')');
+		for (let col = 1; col <= 15; col++) {
+			assert.strictEqual(line1.getModelColumnOfViewPosition(1, col), 13 + col, 'getInputColumnOfOutputPosition(1, ' + col + ')');
 		}
-		for (var col = 1; col <= 16; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(2, col), 13 + 14 + col, 'getInputColumnOfOutputPosition(2, ' + col + ')');
+		for (let col = 1; col <= 16; col++) {
+			assert.strictEqual(line1.getModelColumnOfViewPosition(2, col), 13 + 14 + col, 'getInputColumnOfOutputPosition(2, ' + col + ')');
 		}
-		for (var col = 1; col <= 13; col++) {
-			assert.deepEqual(line1.getViewPositionOfModelPosition(0, col), pos(0, col), 'getOutputPositionOfInputPosition(' + col + ')');
+		for (let col = 1; col <= 13; col++) {
+			assert.deepStrictEqual(line1.getViewPositionOfModelPosition(0, col), pos(0, col), 'getOutputPositionOfInputPosition(' + col + ')');
 		}
-		for (var col = 1 + 13; col <= 14 + 13; col++) {
-			assert.deepEqual(line1.getViewPositionOfModelPosition(0, col), pos(1, col - 13), 'getOutputPositionOfInputPosition(' + col + ')');
+		for (let col = 1 + 13; col <= 14 + 13; col++) {
+			assert.deepStrictEqual(line1.getViewPositionOfModelPosition(0, col), pos(1, col - 13), 'getOutputPositionOfInputPosition(' + col + ')');
 		}
-		for (var col = 1 + 13 + 14; col <= 15 + 14 + 13; col++) {
-			assert.deepEqual(line1.getViewPositionOfModelPosition(0, col), pos(2, col - 13 - 14), 'getOutputPositionOfInputPosition(' + col + ')');
+		for (let col = 1 + 13 + 14; col <= 15 + 14 + 13; col++) {
+			assert.deepStrictEqual(line1.getViewPositionOfModelPosition(0, col), pos(2, col - 13 - 14), 'getOutputPositionOfInputPosition(' + col + ')');
 		}
 
 		model1 = createModel('My First LineMy Second LineAnd another one');
-		line1 = createSplitLine([13, 14, 15], '\t');
+		line1 = createSplitLine([13, 14, 15], [13, 13 + 14, 13 + 14 + 15], 4);
 
-		assert.equal(line1.getViewLineCount(), 3);
-		assert.equal(line1.getViewLineContent(model1, 1, 0), 'My First Line');
-		assert.equal(line1.getViewLineContent(model1, 1, 1), '\tMy Second Line');
-		assert.equal(line1.getViewLineContent(model1, 1, 2), '\tAnd another one');
-		assert.equal(line1.getViewLineMaxColumn(model1, 1, 0), 14);
-		assert.equal(line1.getViewLineMaxColumn(model1, 1, 1), 16);
-		assert.equal(line1.getViewLineMaxColumn(model1, 1, 2), 17);
-		for (var col = 1; col <= 14; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(0, col), col, 'getInputColumnOfOutputPosition(0, ' + col + ')');
+		assert.strictEqual(line1.getViewLineCount(), 3);
+		assert.strictEqual(line1.getViewLineContent(model1, 1, 0), 'My First Line');
+		assert.strictEqual(line1.getViewLineContent(model1, 1, 1), '    My Second Line');
+		assert.strictEqual(line1.getViewLineContent(model1, 1, 2), '    And another one');
+		assert.strictEqual(line1.getViewLineMaxColumn(model1, 1, 0), 14);
+		assert.strictEqual(line1.getViewLineMaxColumn(model1, 1, 1), 19);
+		assert.strictEqual(line1.getViewLineMaxColumn(model1, 1, 2), 20);
+
+		let actualViewColumnMapping: number[][] = [];
+		for (let lineIndex = 0; lineIndex < line1.getViewLineCount(); lineIndex++) {
+			let actualLineViewColumnMapping: number[] = [];
+			for (let col = 1; col <= line1.getViewLineMaxColumn(model1, 1, lineIndex); col++) {
+				actualLineViewColumnMapping.push(line1.getModelColumnOfViewPosition(lineIndex, col));
+			}
+			actualViewColumnMapping.push(actualLineViewColumnMapping);
 		}
-		for (var col = 1; col <= 1; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(1, 1), 13 + col, 'getInputColumnOfOutputPosition(1, ' + col + ')');
+		assert.deepStrictEqual(actualViewColumnMapping, [
+			[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+			[14, 14, 14, 14, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+			[28, 28, 28, 28, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43],
+		]);
+
+		for (let col = 1; col <= 13; col++) {
+			assert.deepStrictEqual(line1.getViewPositionOfModelPosition(0, col), pos(0, col), '6.getOutputPositionOfInputPosition(' + col + ')');
 		}
-		for (var col = 2; col <= 16; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(1, col), 13 + col - 1, 'getInputColumnOfOutputPosition(1, ' + col + ')');
+		for (let col = 1 + 13; col <= 14 + 13; col++) {
+			assert.deepStrictEqual(line1.getViewPositionOfModelPosition(0, col), pos(1, 4 + col - 13), '7.getOutputPositionOfInputPosition(' + col + ')');
 		}
-		for (var col = 1; col <= 1; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(2, col), 13 + 14 + col, 'getInputColumnOfOutputPosition(2, ' + col + ')');
-		}
-		for (var col = 2; col <= 17; col++) {
-			assert.equal(line1.getModelColumnOfViewPosition(2, col), 13 + 14 + col - 1, 'getInputColumnOfOutputPosition(2, ' + col + ')');
-		}
-		for (var col = 1; col <= 13; col++) {
-			assert.deepEqual(line1.getViewPositionOfModelPosition(0, col), pos(0, col), 'getOutputPositionOfInputPosition(' + col + ')');
-		}
-		for (var col = 1 + 13; col <= 14 + 13; col++) {
-			assert.deepEqual(line1.getViewPositionOfModelPosition(0, col), pos(1, 1 + col - 13), 'getOutputPositionOfInputPosition(' + col + ')');
-		}
-		for (var col = 1 + 13 + 14; col <= 15 + 14 + 13; col++) {
-			assert.deepEqual(line1.getViewPositionOfModelPosition(0, col), pos(2, 1 + col - 13 - 14), 'getOutputPositionOfInputPosition(' + col + ')');
+		for (let col = 1 + 13 + 14; col <= 15 + 14 + 13; col++) {
+			assert.deepStrictEqual(line1.getViewPositionOfModelPosition(0, col), pos(2, 4 + col - 13 - 14), '8.getOutputPositionOfInputPosition(' + col + ')');
 		}
 	});
 
-	function withSplitLinesCollection(text: string, callback: (model: Model, linesCollection: SplitLinesCollection) => void): void {
-		let config = new TestConfiguration({});
+	function withSplitLinesCollection(text: string, callback: (model: TextModel, linesCollection: SplitLinesCollection) => void): void {
+		const config = new TestConfiguration({});
+		const wrappingInfo = config.options.get(EditorOption.wrappingInfo);
+		const fontInfo = config.options.get(EditorOption.fontInfo);
+		const wordWrapBreakAfterCharacters = config.options.get(EditorOption.wordWrapBreakAfterCharacters);
+		const wordWrapBreakBeforeCharacters = config.options.get(EditorOption.wordWrapBreakBeforeCharacters);
+		const wrappingIndent = config.options.get(EditorOption.wrappingIndent);
 
-		let hardWrappingLineMapperFactory = new CharacterHardWrappingLineMapperFactory(
-			config.editor.wrappingInfo.wordWrapBreakBeforeCharacters,
-			config.editor.wrappingInfo.wordWrapBreakAfterCharacters,
-			config.editor.wrappingInfo.wordWrapBreakObtrusiveCharacters
-		);
+		const lineBreaksComputerFactory = new MonospaceLineBreaksComputerFactory(wordWrapBreakBeforeCharacters, wordWrapBreakAfterCharacters);
 
-		let model = Model.createFromString([
+		const model = createTextModel([
 			'int main() {',
 			'\tprintf("Hello world!");',
 			'}',
@@ -105,13 +106,15 @@ suite('Editor ViewModel - SplitLinesCollection', () => {
 			'}',
 		].join('\n'));
 
-		let linesCollection = new SplitLinesCollection(
+		const linesCollection = new SplitLinesCollection(
 			model,
-			hardWrappingLineMapperFactory,
+			lineBreaksComputerFactory,
+			lineBreaksComputerFactory,
+			fontInfo,
 			model.getOptions().tabSize,
-			config.editor.wrappingInfo.wrappingColumn,
-			config.editor.fontInfo.typicalFullwidthCharacterWidth / config.editor.fontInfo.typicalHalfwidthCharacterWidth,
-			config.editor.wrappingInfo.wrappingIndent
+			'simple',
+			wrappingInfo.wrappingColumn,
+			wrappingIndent
 		);
 
 		callback(model, linesCollection);
@@ -133,63 +136,65 @@ suite('Editor ViewModel - SplitLinesCollection', () => {
 		].join('\n');
 
 		withSplitLinesCollection(text, (model, linesCollection) => {
-			assert.equal(linesCollection.getViewLineCount(), 6);
+			assert.strictEqual(linesCollection.getViewLineCount(), 6);
 
 			// getOutputIndentGuide
-			assert.equal(linesCollection.getViewLineIndentGuide(-1), 0);
-			assert.equal(linesCollection.getViewLineIndentGuide(0), 0);
-			assert.equal(linesCollection.getViewLineIndentGuide(1), 0);
-			assert.equal(linesCollection.getViewLineIndentGuide(2), 1);
-			assert.equal(linesCollection.getViewLineIndentGuide(3), 0);
-			assert.equal(linesCollection.getViewLineIndentGuide(4), 0);
-			assert.equal(linesCollection.getViewLineIndentGuide(5), 1);
-			assert.equal(linesCollection.getViewLineIndentGuide(6), 0);
-			assert.equal(linesCollection.getViewLineIndentGuide(7), 0);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(-1, -1), [0]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(0, 0), [0]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(1, 1), [0]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(2, 2), [1]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(3, 3), [0]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(4, 4), [0]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(5, 5), [1]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(6, 6), [0]);
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(7, 7), [0]);
+
+			assert.deepStrictEqual(linesCollection.getViewLinesIndentGuides(0, 7), [0, 1, 0, 0, 1, 0]);
 
 			// getOutputLineContent
-			assert.equal(linesCollection.getViewLineContent(-1), 'int main() {');
-			assert.equal(linesCollection.getViewLineContent(0), 'int main() {');
-			assert.equal(linesCollection.getViewLineContent(1), 'int main() {');
-			assert.equal(linesCollection.getViewLineContent(2), '\tprintf("Hello world!");');
-			assert.equal(linesCollection.getViewLineContent(3), '}');
-			assert.equal(linesCollection.getViewLineContent(4), 'int main() {');
-			assert.equal(linesCollection.getViewLineContent(5), '\tprintf("Hello world!");');
-			assert.equal(linesCollection.getViewLineContent(6), '}');
-			assert.equal(linesCollection.getViewLineContent(7), '}');
+			assert.strictEqual(linesCollection.getViewLineContent(-1), 'int main() {');
+			assert.strictEqual(linesCollection.getViewLineContent(0), 'int main() {');
+			assert.strictEqual(linesCollection.getViewLineContent(1), 'int main() {');
+			assert.strictEqual(linesCollection.getViewLineContent(2), '\tprintf("Hello world!");');
+			assert.strictEqual(linesCollection.getViewLineContent(3), '}');
+			assert.strictEqual(linesCollection.getViewLineContent(4), 'int main() {');
+			assert.strictEqual(linesCollection.getViewLineContent(5), '\tprintf("Hello world!");');
+			assert.strictEqual(linesCollection.getViewLineContent(6), '}');
+			assert.strictEqual(linesCollection.getViewLineContent(7), '}');
 
 			// getOutputLineMinColumn
-			assert.equal(linesCollection.getViewLineMinColumn(-1), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(0), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(1), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(2), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(3), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(4), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(5), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(6), 1);
-			assert.equal(linesCollection.getViewLineMinColumn(7), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(-1), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(0), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(1), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(2), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(3), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(4), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(5), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(6), 1);
+			assert.strictEqual(linesCollection.getViewLineMinColumn(7), 1);
 
 			// getOutputLineMaxColumn
-			assert.equal(linesCollection.getViewLineMaxColumn(-1), 13);
-			assert.equal(linesCollection.getViewLineMaxColumn(0), 13);
-			assert.equal(linesCollection.getViewLineMaxColumn(1), 13);
-			assert.equal(linesCollection.getViewLineMaxColumn(2), 25);
-			assert.equal(linesCollection.getViewLineMaxColumn(3), 2);
-			assert.equal(linesCollection.getViewLineMaxColumn(4), 13);
-			assert.equal(linesCollection.getViewLineMaxColumn(5), 25);
-			assert.equal(linesCollection.getViewLineMaxColumn(6), 2);
-			assert.equal(linesCollection.getViewLineMaxColumn(7), 2);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(-1), 13);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(0), 13);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(1), 13);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(2), 25);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(3), 2);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(4), 13);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(5), 25);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(6), 2);
+			assert.strictEqual(linesCollection.getViewLineMaxColumn(7), 2);
 
 			// convertOutputPositionToInputPosition
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(-1, 1), new Position(1, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(0, 1), new Position(1, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(1, 1), new Position(1, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(2, 1), new Position(2, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(3, 1), new Position(3, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(4, 1), new Position(4, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(5, 1), new Position(5, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(6, 1), new Position(6, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(7, 1), new Position(6, 1));
-			assert.deepEqual(linesCollection.convertViewPositionToModelPosition(8, 1), new Position(6, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(-1, 1), new Position(1, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(0, 1), new Position(1, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(1, 1), new Position(1, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(2, 1), new Position(2, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(3, 1), new Position(3, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(4, 1), new Position(4, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(5, 1), new Position(5, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(6, 1), new Position(6, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(7, 1), new Position(6, 1));
+			assert.deepStrictEqual(linesCollection.convertViewPositionToModelPosition(8, 1), new Position(6, 1));
 		});
 	});
 
@@ -211,7 +216,7 @@ suite('Editor ViewModel - SplitLinesCollection', () => {
 			]);
 
 			let viewLineCount = linesCollection.getViewLineCount();
-			assert.equal(viewLineCount, 1, 'getOutputLineCount()');
+			assert.strictEqual(viewLineCount, 1, 'getOutputLineCount()');
 
 			let modelLineCount = model.getLineCount();
 			for (let lineNumber = 0; lineNumber <= modelLineCount + 1; lineNumber++) {
@@ -226,12 +231,12 @@ suite('Editor ViewModel - SplitLinesCollection', () => {
 					if (viewLineNumber < 1) {
 						viewLineNumber = 1;
 					}
-					var lineCount = linesCollection.getViewLineCount();
+					let lineCount = linesCollection.getViewLineCount();
 					if (viewLineNumber > lineCount) {
 						viewLineNumber = lineCount;
 					}
-					var viewMinColumn = linesCollection.getViewLineMinColumn(viewLineNumber);
-					var viewMaxColumn = linesCollection.getViewLineMaxColumn(viewLineNumber);
+					let viewMinColumn = linesCollection.getViewLineMinColumn(viewLineNumber);
+					let viewMaxColumn = linesCollection.getViewLineMaxColumn(viewLineNumber);
 					if (viewColumn < viewMinColumn) {
 						viewColumn = viewMinColumn;
 					}
@@ -239,7 +244,7 @@ suite('Editor ViewModel - SplitLinesCollection', () => {
 						viewColumn = viewMaxColumn;
 					}
 					let validViewPosition = new Position(viewLineNumber, viewColumn);
-					assert.equal(viewPosition.toString(), validViewPosition.toString(), 'model->view for ' + lineNumber + ', ' + column);
+					assert.strictEqual(viewPosition.toString(), validViewPosition.toString(), 'model->view for ' + lineNumber + ', ' + column);
 				}
 			}
 
@@ -249,7 +254,7 @@ suite('Editor ViewModel - SplitLinesCollection', () => {
 				for (let column = lineMinColumn - 1; column <= lineMaxColumn + 1; column++) {
 					let modelPosition = linesCollection.convertViewPositionToModelPosition(lineNumber, column);
 					let validModelPosition = model.validatePosition(modelPosition);
-					assert.equal(modelPosition.toString(), validModelPosition.toString(), 'view->model for ' + lineNumber + ', ' + column);
+					assert.strictEqual(modelPosition.toString(), validModelPosition.toString(), 'view->model for ' + lineNumber + ', ' + column);
 				}
 			}
 		});
@@ -320,15 +325,15 @@ suite('SplitLinesCollection', () => {
 		]
 	];
 
-	let model: Model = null;
-	let languageRegistration: IDisposable = null;
+	let model: TextModel | null = null;
+	let languageRegistration: IDisposable | null = null;
 
 	setup(() => {
 		let _lineIndex = 0;
 		const tokenizationSupport: modes.ITokenizationSupport = {
 			getInitialState: () => NULL_STATE,
-			tokenize: undefined,
-			tokenize2: (line: string, state: modes.IState): TokenizationResult2 => {
+			tokenize: undefined!,
+			tokenize2: (line: string, hasEOL: boolean, state: modes.IState): TokenizationResult2 => {
 				let tokens = _tokens[_lineIndex++];
 
 				let result = new Uint32Array(2 * tokens.length);
@@ -343,15 +348,15 @@ suite('SplitLinesCollection', () => {
 		};
 		const LANGUAGE_ID = 'modelModeTest1';
 		languageRegistration = modes.TokenizationRegistry.register(LANGUAGE_ID, tokenizationSupport);
-		model = Model.createFromString(_text.join('\n'), undefined, new modes.LanguageIdentifier(LANGUAGE_ID, 0));
+		model = createTextModel(_text.join('\n'), undefined, new modes.LanguageIdentifier(LANGUAGE_ID, 0));
 		// force tokenization
 		model.forceTokenization(model.getLineCount());
 	});
 
 	teardown(() => {
-		model.dispose();
+		model!.dispose();
 		model = null;
-		languageRegistration.dispose();
+		languageRegistration!.dispose();
 		languageRegistration = null;
 	});
 
@@ -361,14 +366,15 @@ suite('SplitLinesCollection', () => {
 		value: number;
 	}
 
-	function assertViewLineTokens(actual: ViewLineToken[], expected: ITestViewLineToken[]): void {
-		let _actual = actual.map((token) => {
-			return {
-				endIndex: token.endIndex,
-				value: token.getForeground()
+	function assertViewLineTokens(_actual: IViewLineTokens, expected: ITestViewLineToken[]): void {
+		let actual: ITestViewLineToken[] = [];
+		for (let i = 0, len = _actual.getCount(); i < len; i++) {
+			actual[i] = {
+				endIndex: _actual.getEndOffset(i),
+				value: _actual.getForeground(i)
 			};
-		});
-		assert.deepEqual(_actual, expected);
+		}
+		assert.deepStrictEqual(actual, expected);
 	}
 
 	interface ITestMinimapLineRenderingData {
@@ -378,19 +384,22 @@ suite('SplitLinesCollection', () => {
 		tokens: ITestViewLineToken[];
 	}
 
-	function assertMinimapLineRenderingData(actual: ViewLineData, expected: ITestMinimapLineRenderingData): void {
+	function assertMinimapLineRenderingData(actual: ViewLineData, expected: ITestMinimapLineRenderingData | null): void {
 		if (actual === null && expected === null) {
 			assert.ok(true);
 			return;
 		}
-		assert.equal(actual.content, expected.content);
-		assert.equal(actual.minColumn, expected.minColumn);
-		assert.equal(actual.maxColumn, expected.maxColumn);
+		if (expected === null) {
+			assert.ok(false);
+		}
+		assert.strictEqual(actual.content, expected.content);
+		assert.strictEqual(actual.minColumn, expected.minColumn);
+		assert.strictEqual(actual.maxColumn, expected.maxColumn);
 		assertViewLineTokens(actual.tokens, expected.tokens);
 	}
 
-	function assertMinimapLinesRenderingData(actual: ViewLineData[], expected: ITestMinimapLineRenderingData[]): void {
-		assert.equal(actual.length, expected.length);
+	function assertMinimapLinesRenderingData(actual: ViewLineData[], expected: Array<ITestMinimapLineRenderingData | null>): void {
+		assert.strictEqual(actual.length, expected.length);
 		for (let i = 0; i < expected.length; i++) {
 			assertMinimapLineRenderingData(actual[i], expected[i]);
 		}
@@ -403,7 +412,7 @@ suite('SplitLinesCollection', () => {
 				let count = end - start + 1;
 				for (let desired = Math.pow(2, count) - 1; desired >= 0; desired--) {
 					let needed: boolean[] = [];
-					let expected: ITestMinimapLineRenderingData[] = [];
+					let expected: Array<ITestMinimapLineRenderingData | null> = [];
 					for (let i = 0; i < count; i++) {
 						needed[i] = (desired & (1 << i)) ? true : false;
 						expected[i] = (needed[i] ? all[start - 1 + i] : null);
@@ -418,16 +427,16 @@ suite('SplitLinesCollection', () => {
 	}
 
 	test('getViewLinesData - no wrapping', () => {
-		withSplitLinesCollection(model, 'off', 0, (splitLinesCollection) => {
-			assert.equal(splitLinesCollection.getViewLineCount(), 8);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(1, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(2, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(3, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(4, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(5, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(6, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(7, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(8, 1), true);
+		withSplitLinesCollection(model!, 'off', 0, (splitLinesCollection) => {
+			assert.strictEqual(splitLinesCollection.getViewLineCount(), 8);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(1, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(2, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(3, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(4, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(5, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(6, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(7, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(8, 1), true);
 
 			let _expected: ITestMinimapLineRenderingData[] = [
 				{
@@ -531,15 +540,15 @@ suite('SplitLinesCollection', () => {
 			]);
 
 			splitLinesCollection.setHiddenAreas([new Range(2, 1, 4, 1)]);
-			assert.equal(splitLinesCollection.getViewLineCount(), 5);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(1, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(2, 1), false);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(3, 1), false);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(4, 1), false);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(5, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(6, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(7, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(8, 1), true);
+			assert.strictEqual(splitLinesCollection.getViewLineCount(), 5);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(1, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(2, 1), false);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(3, 1), false);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(4, 1), false);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(5, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(6, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(7, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(8, 1), true);
 
 			assertAllMinimapLinesRenderingData(splitLinesCollection, [
 				_expected[0],
@@ -552,16 +561,16 @@ suite('SplitLinesCollection', () => {
 	});
 
 	test('getViewLinesData - with wrapping', () => {
-		withSplitLinesCollection(model, 'wordWrapColumn', 30, (splitLinesCollection) => {
-			assert.equal(splitLinesCollection.getViewLineCount(), 12);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(1, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(2, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(3, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(4, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(5, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(6, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(7, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(8, 1), true);
+		withSplitLinesCollection(model!, 'wordWrapColumn', 30, (splitLinesCollection) => {
+			assert.strictEqual(splitLinesCollection.getViewLineCount(), 12);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(1, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(2, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(3, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(4, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(5, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(6, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(7, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(8, 1), true);
 
 			let _expected: ITestMinimapLineRenderingData[] = [
 				{
@@ -601,12 +610,12 @@ suite('SplitLinesCollection', () => {
 					]
 				},
 				{
-					content: '			world");',
-					minColumn: 4,
-					maxColumn: 12,
+					content: '            world");',
+					minColumn: 13,
+					maxColumn: 21,
 					tokens: [
-						{ endIndex: 9, value: 15 },
-						{ endIndex: 11, value: 16 },
+						{ endIndex: 18, value: 15 },
+						{ endIndex: 20, value: 16 },
 					]
 				},
 				{
@@ -643,28 +652,28 @@ suite('SplitLinesCollection', () => {
 					]
 				},
 				{
-					content: '			world, this is a ',
-					minColumn: 4,
-					maxColumn: 21,
+					content: '            world, this is a ',
+					minColumn: 13,
+					maxColumn: 30,
 					tokens: [
-						{ endIndex: 20, value: 28 },
+						{ endIndex: 29, value: 28 },
 					]
 				},
 				{
-					content: '			somewhat longer ',
-					minColumn: 4,
+					content: '            somewhat longer ',
+					minColumn: 13,
+					maxColumn: 29,
+					tokens: [
+						{ endIndex: 28, value: 28 },
+					]
+				},
+				{
+					content: '            line");',
+					minColumn: 13,
 					maxColumn: 20,
 					tokens: [
-						{ endIndex: 19, value: 28 },
-					]
-				},
-				{
-					content: '			line");',
-					minColumn: 4,
-					maxColumn: 11,
-					tokens: [
-						{ endIndex: 8, value: 28 },
-						{ endIndex: 10, value: 29 },
+						{ endIndex: 17, value: 28 },
+						{ endIndex: 19, value: 29 },
 					]
 				},
 				{
@@ -701,15 +710,15 @@ suite('SplitLinesCollection', () => {
 			]);
 
 			splitLinesCollection.setHiddenAreas([new Range(2, 1, 4, 1)]);
-			assert.equal(splitLinesCollection.getViewLineCount(), 8);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(1, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(2, 1), false);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(3, 1), false);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(4, 1), false);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(5, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(6, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(7, 1), true);
-			assert.equal(splitLinesCollection.modelPositionIsVisible(8, 1), true);
+			assert.strictEqual(splitLinesCollection.getViewLineCount(), 8);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(1, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(2, 1), false);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(3, 1), false);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(4, 1), false);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(5, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(6, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(7, 1), true);
+			assert.strictEqual(splitLinesCollection.modelPositionIsVisible(8, 1), true);
 
 			assertAllMinimapLinesRenderingData(splitLinesCollection, [
 				_expected[0],
@@ -724,26 +733,29 @@ suite('SplitLinesCollection', () => {
 		});
 	});
 
-	function withSplitLinesCollection(model: Model, wordWrap: 'on' | 'off' | 'wordWrapColumn' | 'bounded', wordWrapColumn: number, callback: (splitLinesCollection: SplitLinesCollection) => void): void {
-		let configuration = new TestConfiguration({
+	function withSplitLinesCollection(model: TextModel, wordWrap: 'on' | 'off' | 'wordWrapColumn' | 'bounded', wordWrapColumn: number, callback: (splitLinesCollection: SplitLinesCollection) => void): void {
+		const configuration = new TestConfiguration({
 			wordWrap: wordWrap,
 			wordWrapColumn: wordWrapColumn,
 			wrappingIndent: 'indent'
 		});
+		const wrappingInfo = configuration.options.get(EditorOption.wrappingInfo);
+		const fontInfo = configuration.options.get(EditorOption.fontInfo);
+		const wordWrapBreakAfterCharacters = configuration.options.get(EditorOption.wordWrapBreakAfterCharacters);
+		const wordWrapBreakBeforeCharacters = configuration.options.get(EditorOption.wordWrapBreakBeforeCharacters);
+		const wrappingIndent = configuration.options.get(EditorOption.wrappingIndent);
 
-		let factory = new CharacterHardWrappingLineMapperFactory(
-			configuration.editor.wrappingInfo.wordWrapBreakBeforeCharacters,
-			configuration.editor.wrappingInfo.wordWrapBreakAfterCharacters,
-			configuration.editor.wrappingInfo.wordWrapBreakObtrusiveCharacters
-		);
+		const lineBreaksComputerFactory = new MonospaceLineBreaksComputerFactory(wordWrapBreakBeforeCharacters, wordWrapBreakAfterCharacters);
 
-		let linesCollection = new SplitLinesCollection(
+		const linesCollection = new SplitLinesCollection(
 			model,
-			factory,
+			lineBreaksComputerFactory,
+			lineBreaksComputerFactory,
+			fontInfo,
 			model.getOptions().tabSize,
-			configuration.editor.wrappingInfo.wrappingColumn,
-			configuration.editor.fontInfo.typicalFullwidthCharacterWidth / configuration.editor.fontInfo.typicalHalfwidthCharacterWidth,
-			configuration.editor.wrappingInfo.wrappingIndent
+			'simple',
+			wrappingInfo.wrappingColumn,
+			wrappingIndent
 		);
 
 		callback(linesCollection);
@@ -757,30 +769,37 @@ function pos(lineNumber: number, column: number): Position {
 	return new Position(lineNumber, column);
 }
 
-function createSplitLine(splitLengths: number[], wrappedLinesPrefix: string, isVisible: boolean = true): SplitLine {
-	return new SplitLine(createLineMapping(splitLengths, wrappedLinesPrefix), isVisible);
+function createSplitLine(splitLengths: number[], breakingOffsetsVisibleColumn: number[], wrappedTextIndentWidth: number, isVisible: boolean = true): SplitLine {
+	return new SplitLine(createLineBreakData(splitLengths, breakingOffsetsVisibleColumn, wrappedTextIndentWidth), isVisible);
 }
 
-function createLineMapping(breakingLengths: number[], wrappedLinesPrefix: string): ILineMapping {
-	return new CharacterHardWrappingLineMapping(
-		new PrefixSumComputer(toUint32Array(breakingLengths)),
-		wrappedLinesPrefix
-	);
+function createLineBreakData(breakingLengths: number[], breakingOffsetsVisibleColumn: number[], wrappedTextIndentWidth: number): LineBreakData {
+	let sums: number[] = [];
+	for (let i = 0; i < breakingLengths.length; i++) {
+		sums[i] = (i > 0 ? sums[i - 1] : 0) + breakingLengths[i];
+	}
+	return new LineBreakData(sums, breakingOffsetsVisibleColumn, wrappedTextIndentWidth);
 }
 
-function createModel(text: string): IModel {
+function createModel(text: string): ISimpleModel {
 	return {
 		getLineTokens: (lineNumber: number) => {
-			return null;
+			return null!;
 		},
 		getLineContent: (lineNumber: number) => {
 			return text;
+		},
+		getLineLength: (lineNumber: number) => {
+			return text.length;
 		},
 		getLineMinColumn: (lineNumber: number) => {
 			return 1;
 		},
 		getLineMaxColumn: (lineNumber: number) => {
 			return text.length + 1;
+		},
+		getValueInRange: (range: IRange, eol?: EndOfLinePreference) => {
+			return text.substring(range.startColumn - 1, range.endColumn - 1);
 		}
 	};
 }
